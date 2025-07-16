@@ -11,6 +11,7 @@ import jwt from 'jsonwebtoken';
 import cookieParser from 'cookie-parser';
 import cors from 'cors';
 import UserModel, { IUser } from './models/user.model';
+import apiRoutes from './routes/api.routes';
 
 // Load environment variables
 dotenv.config();
@@ -121,6 +122,8 @@ app.get(
     res.redirect(`${process.env.FRONTEND_URL}/dashboard`);
   }
 );
+
+app.use('/api', apiRoutes);
 
 // --- Server Start ---
 app.listen(PORT, () => {
