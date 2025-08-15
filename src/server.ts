@@ -12,6 +12,7 @@ import cookieParser from 'cookie-parser';
 import cors from 'cors';
 import UserModel, { IUser } from './models/user.model';
 import apiRoutes from './routes/api.routes';
+import mappingRoutes from './routes/mapping.routes'; // <-- IMPORT the new routes
 
 // Load environment variables
 dotenv.config();
@@ -124,6 +125,7 @@ app.get(
 );
 
 app.use('/api', apiRoutes);
+app.use('/api/mappings', mappingRoutes);
 
 // --- Server Start ---
 app.listen(PORT, () => {

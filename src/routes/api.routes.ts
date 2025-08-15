@@ -5,16 +5,15 @@ import { XMLParser } from 'fast-xml-parser';
 import { Types } from 'mongoose';
 import UserModel from '../models/user.model';
 import TransactionModel from '../models/transaction.model';
+import SourceMappingModel from '../models/sourceMapping.model';
 
 const router = Router();
 
 /**
- * Extracts transaction data from a list of SMS objects.
+ * Extracts raw transaction data from a list of SMS objects.
  */
 function extractTransactionsFromSMS(smsList: any[], source: string) {
   const transactions = [];
-
-  // --- NEW, MORE INTELLIGENT KEYWORD LISTS ---
   const DEBIT_KEYWORDS = [
     'debited for',
     'spent on',
@@ -31,7 +30,6 @@ function extractTransactionsFromSMS(smsList: any[], source: string) {
     'deposited',
     'refund of',
   ];
-  // Keywords that automatically REJECT a message
   const REJECTION_KEYWORDS = [
     'offer',
     'earn',
@@ -41,17 +39,11 @@ function extractTransactionsFromSMS(smsList: any[], source: string) {
     'discount',
     'cashback up to',
   ];
-
-  // --- A MORE ROBUST REGEX ---
-  // This looks for a currency symbol and captures the number next to it.
   const amountRegex = /(?:Rs\.?|INR|₹)\s*([\d,]+\.?\d*)/i;
-
-  // --- OTHER REGEXES ---
   const upiIdRegex = /\b[\w.-]+@[\w.-]+\b/i;
   const cardRegex = /\b(?:Card\s+\*\*\d{4}|credit card|debit card)\b/i;
   const bankRegex = /\b(?:A\/c\s+\w+|A\/c\s+XX\d+|account\s+number)\b/i;
   const failedRegex = /\b(failed|reversed|refund(?:ed)?|unsuccessful)\b/i;
-
   const upiAppPatterns: { [key: string]: RegExp } = {
     GPay: /\b(Google Pay|GPay)\b/i,
     PhonePe: /\b(PhonePe)\b/i,
@@ -59,38 +51,29 @@ function extractTransactionsFromSMS(smsList: any[], source: string) {
   };
 
   for (const sms of smsList) {
-    const body = (sms['@_body'] || '')
-      .replace(/\s+/g, ' ')
-      .trim()
-      .toLowerCase(); // Convert to lowercase for easier matching
+    const originalBody = sms['@_body'] || '';
+    const body = originalBody.replace(/\s+/g, ' ').trim().toLowerCase();
     const smsDate = sms['@_date'];
     if (!body || !smsDate) continue;
 
-    // --- STEP 1: REJECTION FILTER ---
     if (REJECTION_KEYWORDS.some((keyword) => body.includes(keyword))) {
-      continue; // Skip this SMS entirely if it contains a rejection keyword
+      continue;
     }
 
-    // --- STEP 2: AMOUNT PARSING ---
     const amountMatch = body.match(amountRegex);
-    if (!amountMatch) continue; // If no clear amount with a currency symbol is found, it's not a transaction.
+    if (!amountMatch) continue;
 
     const amount = parseFloat(amountMatch[1].replace(/,/g, ''));
     if (isNaN(amount)) continue;
 
-    // --- STEP 3: DEBIT/CREDIT TYPE IDENTIFICATION ---
     let type: 'credit' | 'debit' | null = null;
-
     if (DEBIT_KEYWORDS.some((keyword) => body.includes(keyword))) {
       type = 'debit';
     } else if (CREDIT_KEYWORDS.some((keyword) => body.includes(keyword))) {
       type = 'credit';
     }
-
-    // If we couldn't determine a clear type, it's probably not a transaction we care about.
     if (!type) continue;
 
-    // --- STEP 4: MODE IDENTIFICATION (same as before) ---
     let mode = 'UPI';
     for (const [app, pattern] of Object.entries(upiAppPatterns)) {
       if (pattern.test(body)) {
@@ -108,19 +91,20 @@ function extractTransactionsFromSMS(smsList: any[], source: string) {
     transactions.push({
       smsId: smsDate,
       date: new Date(parseInt(smsDate)),
-      body: sms['@_body'], // Store the original, non-lowercase body
+      body: originalBody,
       amount,
       type,
       mode,
-      source,
+      source, // This is the initial source (e.g., 'Mom', 'Dad')
       status: failedRegex.test(body) ? 'failed' : 'success',
     });
   }
   return transactions;
 }
+
 /**
  * POST /api/sync/drive
- * Protected route to trigger a sync with Google Drive for a specific profile.
+ * Protected route to sync data, now with source mapping logic.
  */
 router.post(
   '/sync/drive',
@@ -138,10 +122,11 @@ router.post(
     try {
       const user = await UserModel.findById(userId);
       if (!user || !user.googleRefreshToken) {
-        return res.status(401).json({
-          message:
-            'User not found or Google refresh token is missing. Please re-authenticate.',
-        });
+        return res
+          .status(401)
+          .json({
+            message: 'User not found or Google refresh token is missing.',
+          });
       }
 
       const oauth2Client = new google.auth.OAuth2(
@@ -165,7 +150,7 @@ router.post(
       }
 
       const fileRes = await drive.files.list({
-        q: `'${folderId}' in parents and name contains 'sms-' and name contains '.xml' and trashed = false`,
+        q: `'${folderId}' in parents and name contains 'sms-' and name contains '.xml'`,
         orderBy: 'name desc',
         pageSize: 1,
         fields: 'files(id, name)',
@@ -181,23 +166,45 @@ router.post(
         fileId: latestFile.id,
         alt: 'media',
       });
-
       const parser = new XMLParser({
         ignoreAttributes: false,
         attributeNamePrefix: '@_',
       });
       const parsedXml = parser.parse(fileContentRes.data as string);
       const smsList = parsedXml?.smses?.sms || [];
-      const transactions = extractTransactionsFromSMS(smsList, source);
-      if (transactions.length === 0) {
+
+      // --- SOURCE MAPPING LOGIC ---
+      // 1. Fetch the user's mapping rules from the database.
+      const userMappings = await SourceMappingModel.find({ userId });
+
+      // 2. Extract transactions with the initial source ('Me', 'Mom', 'Dad').
+      const rawTransactions = extractTransactionsFromSMS(smsList, source);
+
+      // 3. Apply the mapping rules to each transaction.
+      const mappedTransactions = rawTransactions.map((tx) => {
+        const matchingRule = userMappings.find((rule) =>
+          rule.matchStrings.some((str) =>
+            tx.body.toLowerCase().includes(str.toLowerCase())
+          )
+        );
+        if (matchingRule) {
+          // If a rule matches, override the transaction's 'mode' with the clean mapping name.
+          // We change 'mode' instead of 'source' so we can still filter by 'Me', 'Mom', 'Dad'.
+          return { ...tx, mode: matchingRule.mappingName };
+        }
+        return tx;
+      });
+      // --- END SOURCE MAPPING LOGIC ---
+
+      if (mappedTransactions.length === 0) {
         return res.json({
-          message: `Sync complete. No transactions found in file '${latestFile.name}'.`,
+          message: `Sync complete. No valid transactions found in file '${latestFile.name}'.`,
         });
       }
 
-      const operations = transactions.map((tx) => ({
+      const operations = mappedTransactions.map((tx) => ({
         updateOne: {
-          filter: { userId, source: tx.source, smsId: tx.smsId },
+          filter: { userId, smsId: tx.smsId }, // We use smsId for uniqueness across all sources
           update: { $set: { ...tx, userId } },
           upsert: true,
         },
@@ -207,17 +214,19 @@ router.post(
       res.status(200).json({
         message: `Sync complete for '${source}'.`,
         fileName: latestFile.name,
-        totalFound: transactions.length,
+        totalFound: mappedTransactions.length,
         newlyAdded: result.upsertedCount,
         modified: result.modifiedCount,
       });
     } catch (error: any) {
       console.error('Drive Sync Error:', error);
       if (error.response?.data?.error === 'invalid_grant') {
-        return res.status(401).json({
-          message:
-            'Authentication error with Google. The token might be revoked. Please re-authenticate.',
-        });
+        return res
+          .status(401)
+          .json({
+            message:
+              'Authentication error with Google. Please re-authenticate.',
+          });
       }
       res
         .status(500)
@@ -228,7 +237,7 @@ router.post(
 
 /**
  * GET /api/transactions
- * A protected route to fetch all transactions for the logged-in user.
+ * Fetches paginated and filtered transactions for the logged-in user.
  */
 router.get(
   '/transactions',
@@ -240,36 +249,20 @@ router.get(
       const limit = parseInt(req.query.limit as string) || 10;
       const skip = (page - 1) * limit;
 
-      // 1. Create the base filter object
       const queryFilter: { userId: any; source?: any } = { userId: userId };
       const source = req.query.source as string;
 
       if (source && source.toLowerCase() !== 'all') {
-        // --- ADD THIS LOG ---
-        console.log(`>>> FILTERING BY SOURCE: ${source}`);
-        // --- END LOG ---
         queryFilter.source = new RegExp(`^${source}$`, 'i');
       }
 
-      // 2. Add the source to the filter if it's provided and not 'All'
-      if (source && source.toLowerCase() !== 'all') {
-        queryFilter.source = new RegExp(`^${source}$`, 'i');
-      }
-
-      console.log('Executing DB query with filter:', queryFilter); // Add this log for confirmation
-
-      // 3. --- THE FIX ---
-      //    Use the dynamic `queryFilter` object in both database calls.
       const transactions = await TransactionModel.find(queryFilter)
         .sort({ date: -1 })
         .skip(skip)
         .limit(limit);
-
       const totalTransactions = await TransactionModel.countDocuments(
         queryFilter
       );
-      // --- END FIX ---
-
       const totalPages = Math.ceil(totalTransactions / limit);
 
       res.status(200).json({
@@ -289,7 +282,7 @@ router.get(
 
 /**
  * PATCH /api/transactions/:id
- * A protected route to update a single transaction (e.g., its description).
+ * Updates a single transaction's description.
  */
 router.patch(
   '/transactions/:id',
@@ -305,7 +298,6 @@ router.patch(
           .status(400)
           .json({ message: 'Invalid transaction ID format.' });
       }
-
       if (typeof description !== 'string') {
         return res
           .status(400)
@@ -313,19 +305,19 @@ router.patch(
       }
 
       const updatedTransaction = await TransactionModel.findOneAndUpdate(
-        // The filter ensures a user can only update their OWN transaction.
         { _id: id, userId: userId },
         { description: description },
-        { new: true } // This option returns the document after the update.
+        { new: true }
       );
 
       if (!updatedTransaction) {
-        return res.status(404).json({
-          message:
-            'Transaction not found or you do not have permission to edit it.',
-        });
+        return res
+          .status(404)
+          .json({
+            message:
+              'Transaction not found or you do not have permission to edit it.',
+          });
       }
-
       res.status(200).json(updatedTransaction);
     } catch (error) {
       console.error('Error updating transaction:', error);
