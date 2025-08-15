@@ -14,58 +14,84 @@ const router = Router();
 function extractTransactionsFromSMS(smsList: any[], source: string) {
   const transactions = [];
 
-  // --- THE NEW, LAYERED REGEX APPROACH ---
+  // --- NEW, MORE INTELLIGENT KEYWORD LISTS ---
+  const DEBIT_KEYWORDS = [
+    'debited for',
+    'spent on',
+    'purchase of',
+    'payment of',
+    'sent to',
+    'charged on',
+    'withdrawn',
+  ];
+  const CREDIT_KEYWORDS = [
+    'credited with',
+    'credited for',
+    'received from',
+    'deposited',
+    'refund of',
+  ];
+  // Keywords that automatically REJECT a message
+  const REJECTION_KEYWORDS = [
+    'offer',
+    'earn',
+    'save up to',
+    'congratulations',
+    'deal',
+    'discount',
+    'cashback up to',
+  ];
 
-  // Regex 1: High Confidence. Looks for a number directly adjacent to a currency symbol.
-  // It handles both "Rs 500" and "500 INR".
-  const currencyFirstRegex = /(?:Rs\.?|INR|₹)\s*([\d,]+\.?\d*)/i;
-  const amountFirstRegex = /([\d,]+\.?\d*)\s*(?:Rs\.?|INR|₹)/i;
+  // --- A MORE ROBUST REGEX ---
+  // This looks for a currency symbol and captures the number next to it.
+  const amountRegex = /(?:Rs\.?|INR|₹)\s*([\d,]+\.?\d*)/i;
 
-  // Regex 2: Fallback. Looks for keywords if the above fails. This is now more constrained.
-  const keywordRegex =
-    /(?:debited by|credited with|payment of|spent at)\s*(?:Rs\.?|INR|₹)?\s*([\d,]+\.?\d*)/i;
-
-  // --- END NEW REGEX ---
-
+  // --- OTHER REGEXES ---
   const upiIdRegex = /\b[\w.-]+@[\w.-]+\b/i;
   const cardRegex = /\b(?:Card\s+\*\*\d{4}|credit card|debit card)\b/i;
   const bankRegex = /\b(?:A\/c\s+\w+|A\/c\s+XX\d+|account\s+number)\b/i;
   const failedRegex = /\b(failed|reversed|refund(?:ed)?|unsuccessful)\b/i;
 
   const upiAppPatterns: { [key: string]: RegExp } = {
-    GPay: /\b(Google Pay|GPay|okgoogle)\b|@okgoogle/i,
-    PhonePe: /\b(PhonePe|okphonepe)\b|@ybl/i,
-    Paytm: /\b(Paytm|okpaytm)\b|@paytm/i,
+    GPay: /\b(Google Pay|GPay)\b/i,
+    PhonePe: /\b(PhonePe)\b/i,
+    Paytm: /\b(Paytm)\b/i,
   };
 
   for (const sms of smsList) {
-    const body = (sms['@_body'] || '').replace(/\s+/g, ' ').trim();
+    const body = (sms['@_body'] || '')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .toLowerCase(); // Convert to lowercase for easier matching
     const smsDate = sms['@_date'];
     if (!body || !smsDate) continue;
 
-    // --- NEW, LAYERED PARSING LOGIC ---
-    let amountMatch = body.match(currencyFirstRegex);
-    if (!amountMatch) {
-      amountMatch = body.match(amountFirstRegex);
-    }
-    if (!amountMatch) {
-      amountMatch = body.match(keywordRegex);
+    // --- STEP 1: REJECTION FILTER ---
+    if (REJECTION_KEYWORDS.some((keyword) => body.includes(keyword))) {
+      continue; // Skip this SMS entirely if it contains a rejection keyword
     }
 
-    if (!amountMatch) continue;
+    // --- STEP 2: AMOUNT PARSING ---
+    const amountMatch = body.match(amountRegex);
+    if (!amountMatch) continue; // If no clear amount with a currency symbol is found, it's not a transaction.
 
-    // The first non-null capture group is our amount.
-    const amountStr = amountMatch[1];
-    if (!amountStr) continue;
-
-    const amount = parseFloat(amountStr.replace(/,/g, ''));
-    // --- END NEW LOGIC ---
-
+    const amount = parseFloat(amountMatch[1].replace(/,/g, ''));
     if (isNaN(amount)) continue;
 
-    const type = /credited|received/i.test(body) ? 'credit' : 'debit';
+    // --- STEP 3: DEBIT/CREDIT TYPE IDENTIFICATION ---
+    let type: 'credit' | 'debit' | null = null;
+
+    if (DEBIT_KEYWORDS.some((keyword) => body.includes(keyword))) {
+      type = 'debit';
+    } else if (CREDIT_KEYWORDS.some((keyword) => body.includes(keyword))) {
+      type = 'credit';
+    }
+
+    // If we couldn't determine a clear type, it's probably not a transaction we care about.
+    if (!type) continue;
+
+    // --- STEP 4: MODE IDENTIFICATION (same as before) ---
     let mode = 'UPI';
-    // ... (rest of the function is the same)
     for (const [app, pattern] of Object.entries(upiAppPatterns)) {
       if (pattern.test(body)) {
         mode = app;
@@ -82,7 +108,7 @@ function extractTransactionsFromSMS(smsList: any[], source: string) {
     transactions.push({
       smsId: smsDate,
       date: new Date(parseInt(smsDate)),
-      body,
+      body: sms['@_body'], // Store the original, non-lowercase body
       amount,
       type,
       mode,
@@ -92,7 +118,6 @@ function extractTransactionsFromSMS(smsList: any[], source: string) {
   }
   return transactions;
 }
-
 /**
  * POST /api/sync/drive
  * Protected route to trigger a sync with Google Drive for a specific profile.
