@@ -253,6 +253,73 @@ router.post(
 );
 
 /**
+ * POST /api/transactions
+ * A protected route to create a single, manual transaction.
+ */
+router.post(
+  '/transactions',
+  authMiddleware,
+  async (req: Request, res: Response) => {
+    try {
+      const userId = req.auth!.sub;
+      const { amount, type, date, description, mode, source, categoryId } =
+        req.body;
+
+      // --- Data Validation ---
+      if (!amount || !type || !date || !mode || !source) {
+        return res
+          .status(400)
+          .json({
+            message:
+              'Missing required fields: amount, type, date, mode, and source are required.',
+          });
+      }
+      if (typeof amount !== 'number' || amount <= 0) {
+        return res
+          .status(400)
+          .json({ message: 'Amount must be a positive number.' });
+      }
+      if (type !== 'debit' && type !== 'credit') {
+        return res
+          .status(400)
+          .json({ message: 'Type must be either "debit" or "credit".' });
+      }
+      if (categoryId && !Types.ObjectId.isValid(categoryId)) {
+        return res.status(400).json({ message: 'Invalid category ID format.' });
+      }
+      // --- End Validation ---
+
+      // Create a unique "smsId" for manual transactions to maintain schema consistency.
+      // We can use a timestamp combined with a random string.
+      const manualSmsId = `manual_${new Date().getTime()}_${Math.random()
+        .toString(36)
+        .substring(2, 9)}`;
+
+      const newTransaction = await TransactionModel.create({
+        userId,
+        smsId: manualSmsId,
+        body:
+          description ||
+          `Manual Entry on ${new Date(date).toLocaleDateString()}`,
+        amount,
+        type,
+        date: new Date(date),
+        description,
+        mode,
+        source,
+        categoryId: categoryId || null,
+        status: 'success', // Manual entries are always successful
+      });
+
+      res.status(201).json(newTransaction);
+    } catch (error) {
+      console.error('Error creating manual transaction:', error);
+      res.status(500).json({ message: 'Failed to create transaction.' });
+    }
+  }
+);
+
+/**
  * GET /api/transactions
  */
 router.get(
