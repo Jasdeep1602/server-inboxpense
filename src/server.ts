@@ -11,8 +11,11 @@ import jwt from 'jsonwebtoken';
 import cookieParser from 'cookie-parser';
 import cors from 'cors';
 import UserModel, { IUser } from './models/user.model';
+import CategoryModel from './models/category.model';
+import { defaultCategories } from './data/defaultCategories';
 import apiRoutes from './routes/api.routes';
-import mappingRoutes from './routes/mapping.routes'; // <-- IMPORT the new routes
+import mappingRoutes from './routes/mapping.routes';
+import categoryRoutes from './routes/category.routes';
 
 // Load environment variables
 dotenv.config();
@@ -44,8 +47,6 @@ passport.use(
       clientID: process.env.GOOGLE_CLIENT_ID!,
       clientSecret: process.env.GOOGLE_CLIENT_SECRET!,
       callbackURL: process.env.GOOGLE_CALLBACK_URL!,
-      // FIX: Pass accessType and prompt as authorizationURL query parameters
-      // This is the modern way to request offline access for a refresh token.
       authorizationURL: 'https://accounts.google.com/o/oauth2/v2/auth',
       tokenURL: 'https://oauth2.googleapis.com/token',
       scope: [
@@ -53,26 +54,27 @@ passport.use(
         'profile',
         'https://www.googleapis.com/auth/drive.readonly',
       ],
-      passReqToCallback: false, // We don't need the request object in the callback
+      passReqToCallback: false,
     },
-    // FIX: Explicitly type the parameters for the validation callback
     async (
       accessToken: string,
-      refreshToken: string, // This will be provided because we used accessType: 'offline'
+      refreshToken: string,
       profile: Profile,
       done: VerifyCallback
     ) => {
       try {
-        // Find user by their Google ID
         let user = await UserModel.findOne({ googleId: profile.id });
+        let isNewUser = false; // Flag to track if this is a new user
 
         if (user) {
-          // If user exists, always update their refresh token if a new one is provided.
-          // Google only sends a refresh token on the first consent.
+          // If user exists, update their details and refresh token
           user.googleRefreshToken = refreshToken || user.googleRefreshToken;
+          user.name = profile.displayName;
+          user.picture = profile.photos?.[0].value;
           await user.save();
         } else {
           // If user doesn't exist, create a new one
+          isNewUser = true; // Set the flag to true
           user = await UserModel.create({
             googleId: profile.id,
             email: profile.emails?.[0].value,
@@ -81,6 +83,23 @@ passport.use(
             googleRefreshToken: refreshToken,
           });
         }
+
+        // --- THIS IS THE NEW LOGIC ---
+        // If it was a new user, create the default categories for them.
+        if (isNewUser && user) {
+          console.log(
+            `Creating default categories for new user: ${user.email}`
+          );
+          const categoriesToCreate = defaultCategories.map((cat) => ({
+            ...cat,
+            userId: user._id, // Assign the new user's ID to each default category
+          }));
+
+          // Use insertMany for efficient bulk creation
+          await CategoryModel.insertMany(categoriesToCreate);
+        }
+        // --- END NEW LOGIC ---
+
         return done(null, user);
       } catch (error: any) {
         return done(error, undefined);
@@ -93,7 +112,6 @@ passport.use(
 
 app.get(
   '/auth/google',
-  // FIX: Add options object here to pass accessType and prompt
   passport.authenticate('google', {
     accessType: 'offline',
     prompt: 'consent',
@@ -104,7 +122,7 @@ app.get(
   '/auth/google/callback',
   passport.authenticate('google', {
     session: false,
-    failureRedirect: '/login-failure',
+    failureRedirect: '/login-failure', // You can create a simple frontend route for this
   }),
   (req: Request, res: Response) => {
     const user = req.user as IUser;
@@ -124,8 +142,10 @@ app.get(
   }
 );
 
+// --- API Routes Mounting ---
 app.use('/api', apiRoutes);
 app.use('/api/mappings', mappingRoutes);
+app.use('/api/categories', categoryRoutes);
 
 // --- Server Start ---
 app.listen(PORT, () => {

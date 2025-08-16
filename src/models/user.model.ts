@@ -4,7 +4,7 @@ export interface IUser extends Document {
   googleId: string;
   email: string;
   name: string;
-  picture: string;
+  picture?: string;
   googleRefreshToken?: string;
 }
 
