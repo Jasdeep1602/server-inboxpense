@@ -6,6 +6,7 @@ export interface ICategory extends Document {
   icon: string; // We can store the name of an icon (e.g., from lucide-react)
   color: string; // A hex or tailwind color name
   matchStrings: string[]; // Keywords to auto-categorize transactions
+  isDefault: boolean;
 }
 
 const CategorySchema = new Schema<ICategory>(
@@ -15,6 +16,7 @@ const CategorySchema = new Schema<ICategory>(
     icon: { type: String, required: true },
     color: { type: String, default: '#888888' },
     matchStrings: [{ type: String }],
+    isDefault: { type: Boolean, default: false }, // <-- ADD THIS
   },
   { timestamps: true }
 );
