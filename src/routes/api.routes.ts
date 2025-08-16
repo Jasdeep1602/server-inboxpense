@@ -267,12 +267,10 @@ router.post(
 
       // --- Data Validation ---
       if (!amount || !type || !date || !mode || !source) {
-        return res
-          .status(400)
-          .json({
-            message:
-              'Missing required fields: amount, type, date, mode, and source are required.',
-          });
+        return res.status(400).json({
+          message:
+            'Missing required fields: amount, type, date, mode, and source are required.',
+        });
       }
       if (typeof amount !== 'number' || amount <= 0) {
         return res
@@ -328,34 +326,113 @@ router.get(
   async (req: Request, res: Response) => {
     try {
       const userId = req.auth!.sub;
-      const page = parseInt(req.query.page as string) || 1;
-      const limit = parseInt(req.query.limit as string) || 10;
-      const skip = (page - 1) * limit;
+      const {
+        page = '1',
+        limit = '10',
+        source = 'All',
+        groupBy = 'none',
+      } = req.query as { [key: string]: string };
 
-      const queryFilter: { userId: any; source?: any } = { userId: userId };
-      const source = req.query.source as string;
+      const pageNum = parseInt(page);
+      const limitNum = parseInt(limit);
+      const skip = (pageNum - 1) * limitNum;
 
+      // --- AGGREGATION PIPELINE ---
+      const matchStage: any = { userId: new Types.ObjectId(userId) };
       if (source && source.toLowerCase() !== 'all') {
-        queryFilter.source = new RegExp(`^${source}$`, 'i');
+        matchStage.source = new RegExp(`^${source}$`, 'i');
       }
 
-      const transactions = await TransactionModel.find(queryFilter)
-        .populate('categoryId', 'name icon color')
-        .sort({ date: -1 })
-        .skip(skip)
-        .limit(limit);
+      let aggregationPipeline: any[] = [{ $match: matchStage }];
 
-      const totalTransactions = await TransactionModel.countDocuments(
-        queryFilter
-      );
-      const totalPages = Math.ceil(totalTransactions / limit);
+      if (groupBy === 'none') {
+        // Standard paginated find if not grouping
+        const transactions = await TransactionModel.find(matchStage)
+          .populate('categoryId', 'name icon color')
+          .sort({ date: -1 })
+          .skip(skip)
+          .limit(limitNum);
+        const totalTransactions = await TransactionModel.countDocuments(
+          matchStage
+        );
+
+        return res.status(200).json({
+          type: 'list', // Tell the frontend this is a flat list
+          data: transactions,
+          pagination: {
+            currentPage: pageNum,
+            totalPages: Math.ceil(totalTransactions / limitNum),
+            totalItems: totalTransactions,
+          },
+        });
+      }
+
+      // --- GROUPING LOGIC ---
+      let groupStage: any;
+      if (groupBy === 'month') {
+        groupStage = {
+          _id: { $dateToString: { format: '%Y-%m', date: '$date' } },
+          transactions: { $push: '$$ROOT' },
+          totalCredit: {
+            $sum: { $cond: [{ $eq: ['$type', 'credit'] }, '$amount', 0] },
+          },
+          totalDebit: {
+            $sum: { $cond: [{ $eq: ['$type', 'debit'] }, '$amount', 0] },
+          },
+          periodStartDate: { $min: '$date' },
+        };
+      } else if (groupBy === 'week') {
+        groupStage = {
+          _id: { $dateToString: { format: '%Y-%U', date: '$date' } }, // %U for week of the year
+          transactions: { $push: '$$ROOT' },
+          totalCredit: {
+            $sum: { $cond: [{ $eq: ['$type', 'credit'] }, '$amount', 0] },
+          },
+          totalDebit: {
+            $sum: { $cond: [{ $eq: ['$type', 'debit'] }, '$amount', 0] },
+          },
+          periodStartDate: { $min: '$date' },
+        };
+      }
+
+      aggregationPipeline.push({ $sort: { date: -1 } });
+      aggregationPipeline.push({ $group: groupStage });
+      aggregationPipeline.push({ $sort: { periodStartDate: -1 } }); // Sort groups by date
+
+      // We also need to paginate the groups
+      const countPipeline = [...aggregationPipeline, { $count: 'totalGroups' }];
+
+      aggregationPipeline.push({ $skip: skip });
+      aggregationPipeline.push({ $limit: limitNum });
+
+      // Execute both pipelines
+      const [groupedData, totalGroupsResult] = await Promise.all([
+        TransactionModel.aggregate(aggregationPipeline),
+        TransactionModel.aggregate(countPipeline),
+      ]);
+
+      // We need to populate the category data for each transaction inside the groups
+      for (const group of groupedData) {
+        await TransactionModel.populate(group.transactions, {
+          path: 'categoryId',
+          select: 'name icon color',
+        });
+      }
+
+      const totalGroups = totalGroupsResult[0]?.totalGroups || 0;
 
       res.status(200).json({
-        data: transactions,
+        type: 'grouped', // Tell the frontend this is grouped data
+        data: groupedData.map((g) => ({
+          period: g._id,
+          totalCredit: g.totalCredit,
+          totalDebit: g.totalDebit,
+          transactions: g.transactions,
+        })),
         pagination: {
-          currentPage: page,
-          totalPages: totalPages,
-          totalItems: totalTransactions,
+          currentPage: pageNum,
+          totalPages: Math.ceil(totalGroups / limitNum),
+          totalItems: totalGroups,
         },
       });
     } catch (error) {
@@ -364,7 +441,6 @@ router.get(
     }
   }
 );
-
 /**
  * PATCH /api/transactions/:id
  */
