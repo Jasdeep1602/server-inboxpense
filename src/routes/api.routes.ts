@@ -129,6 +129,61 @@ function extractTransactionsFromSMS(smsList: any[], source: string) {
   }
   return transactions;
 }
+
+function mergeDuplicateTransactions(transactions: any[]) {
+  if (transactions.length < 2) {
+    return transactions;
+  }
+
+  // Sort transactions by date to make finding neighbors easy
+  const sorted = transactions.sort(
+    (a, b) => a.date.getTime() - b.date.getTime()
+  );
+  const merged: any[] = [];
+  const discardedIndexes = new Set<number>();
+
+  const TIME_WINDOW_MS = 10 * 60 * 1000; // 10-minute window for duplicate checks
+
+  for (let i = 0; i < sorted.length; i++) {
+    if (discardedIndexes.has(i)) {
+      continue; // Skip this one if it has already been merged
+    }
+
+    let currentTx = sorted[i];
+
+    // Look for duplicates in the near future
+    for (let j = i + 1; j < sorted.length; j++) {
+      if (discardedIndexes.has(j)) {
+        continue;
+      }
+
+      const nextTx = sorted[j];
+
+      // If the next transaction is outside our time window, stop searching for this group
+      if (nextTx.date.getTime() - currentTx.date.getTime() > TIME_WINDOW_MS) {
+        break;
+      }
+
+      // Check for a duplicate: same amount, same type, within the time window
+      if (
+        nextTx.amount === currentTx.amount &&
+        nextTx.type === currentTx.type
+      ) {
+        // --- MERGE LOGIC ---
+        // Let's decide which SMS body is "better" (more informative).
+        // A simple rule: the longer one is often better.
+        // A more complex rule could prioritize messages with "A/c" or "Card".
+        if (nextTx.body.length > currentTx.body.length) {
+          currentTx = { ...nextTx, smsId: currentTx.smsId }; // Keep the earlier smsId for stability
+        }
+        discardedIndexes.add(j); // Mark the other transaction to be discarded
+      }
+    }
+    merged.push(currentTx);
+  }
+
+  return merged;
+}
 /**
  * POST /api/sync/drive
  * Protected route to sync data, now only applying source mapping.
@@ -201,8 +256,10 @@ router.post(
       const userMappings = await SourceMappingModel.find({ userId });
       const rawTransactions = extractTransactionsFromSMS(smsList, source);
 
+      const uniqueTransactions = mergeDuplicateTransactions(rawTransactions);
+
       // **CHANGE**: Auto-categorization is removed. We only apply source mapping.
-      const finalTransactions = rawTransactions.map((tx) => {
+      const finalTransactions = uniqueTransactions.map((tx) => {
         const matchingRule = userMappings.find((rule) =>
           rule.matchStrings.some((str) =>
             tx.body.toLowerCase().includes(str.toLowerCase())
