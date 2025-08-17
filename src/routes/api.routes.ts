@@ -320,6 +320,11 @@ router.post(
 /**
  * GET /api/transactions
  */
+/**
+ * GET /api/transactions
+ * A protected route to fetch transactions for the logged-in user.
+ * Supports filtering by source, pagination, and grouping by week or month.
+ */
 router.get(
   '/transactions',
   authMiddleware,
@@ -337,27 +342,25 @@ router.get(
       const limitNum = parseInt(limit);
       const skip = (pageNum - 1) * limitNum;
 
-      // --- AGGREGATION PIPELINE ---
-      const matchStage: any = { userId: new Types.ObjectId(userId) };
+      // Base filter for all queries, ensuring user only gets their own data.
+      const matchFilter: any = { userId: new Types.ObjectId(userId) };
       if (source && source.toLowerCase() !== 'all') {
-        matchStage.source = new RegExp(`^${source}$`, 'i');
+        matchFilter.source = new RegExp(`^${source}$`, 'i');
       }
 
-      let aggregationPipeline: any[] = [{ $match: matchStage }];
-
+      // --- Handle the 'none' groupBy case (simple list) separately for clarity ---
       if (groupBy === 'none') {
-        // Standard paginated find if not grouping
-        const transactions = await TransactionModel.find(matchStage)
-          .populate('categoryId', 'name icon color')
-          .sort({ date: -1 })
-          .skip(skip)
-          .limit(limitNum);
-        const totalTransactions = await TransactionModel.countDocuments(
-          matchStage
-        );
+        const [transactions, totalTransactions] = await Promise.all([
+          TransactionModel.find(matchFilter)
+            .populate('categoryId', 'name icon color')
+            .sort({ date: -1 })
+            .skip(skip)
+            .limit(limitNum),
+          TransactionModel.countDocuments(matchFilter),
+        ]);
 
         return res.status(200).json({
-          type: 'list', // Tell the frontend this is a flat list
+          type: 'list',
           data: transactions,
           pagination: {
             currentPage: pageNum,
@@ -367,68 +370,83 @@ router.get(
         });
       }
 
-      // --- GROUPING LOGIC ---
-      let groupStage: any;
+      // --- AGGREGATION PIPELINE for 'week' and 'month' grouping ---
+      let aggregationPipeline: any[] = [];
+
+      // 1. Start by matching the user and source filter
+      aggregationPipeline.push({ $match: matchFilter });
+
+      // 2. Sort all transactions by date descending BEFORE grouping
+      aggregationPipeline.push({ $sort: { date: -1 } });
+
+      // 3. Define the key for grouping based on the 'groupBy' parameter
+      let groupKey: any;
       if (groupBy === 'month') {
-        groupStage = {
-          _id: { $dateToString: { format: '%Y-%m', date: '$date' } },
-          transactions: { $push: '$$ROOT' },
-          totalCredit: {
-            $sum: { $cond: [{ $eq: ['$type', 'credit'] }, '$amount', 0] },
-          },
-          totalDebit: {
-            $sum: { $cond: [{ $eq: ['$type', 'debit'] }, '$amount', 0] },
-          },
-          periodStartDate: { $min: '$date' },
-        };
-      } else if (groupBy === 'week') {
-        groupStage = {
-          _id: { $dateToString: { format: '%Y-%U', date: '$date' } }, // %U for week of the year
-          transactions: { $push: '$$ROOT' },
-          totalCredit: {
-            $sum: { $cond: [{ $eq: ['$type', 'credit'] }, '$amount', 0] },
-          },
-          totalDebit: {
-            $sum: { $cond: [{ $eq: ['$type', 'debit'] }, '$amount', 0] },
-          },
-          periodStartDate: { $min: '$date' },
+        groupKey = { $dateToString: { format: '%Y-%m', date: '$date' } };
+      } else {
+        // 'week'
+        groupKey = {
+          $dateTrunc: { date: '$date', unit: 'week', startOfWeek: 'sunday' },
         };
       }
 
-      aggregationPipeline.push({ $sort: { date: -1 } });
-      aggregationPipeline.push({ $group: groupStage });
-      aggregationPipeline.push({ $sort: { periodStartDate: -1 } }); // Sort groups by date
+      // 4. A single, unified grouping stage
+      aggregationPipeline.push({
+        $group: {
+          _id: groupKey,
+          transactions: { $push: '$$ROOT' }, // $$ROOT pushes the entire document
+          totalCredit: {
+            $sum: { $cond: [{ $eq: ['$type', 'credit'] }, '$amount', 0] },
+          },
+          totalDebit: {
+            $sum: { $cond: [{ $eq: ['$type', 'debit'] }, '$amount', 0] },
+          },
+        },
+      });
 
-      // We also need to paginate the groups
-      const countPipeline = [...aggregationPipeline, { $count: 'totalGroups' }];
+      // 5. Sort the final groups in descending chronological order
+      aggregationPipeline.push({ $sort: { _id: -1 } });
 
-      aggregationPipeline.push({ $skip: skip });
-      aggregationPipeline.push({ $limit: limitNum });
+      // 6. Use a $facet stage to perform pagination and total count in one go
+      aggregationPipeline.push({
+        $facet: {
+          metadata: [{ $count: 'totalGroups' }],
+          data: [{ $skip: skip }, { $limit: limitNum }],
+        },
+      });
 
-      // Execute both pipelines
-      const [groupedData, totalGroupsResult] = await Promise.all([
-        TransactionModel.aggregate(aggregationPipeline),
-        TransactionModel.aggregate(countPipeline),
-      ]);
+      // Execute the full pipeline
+      const result = await TransactionModel.aggregate(aggregationPipeline);
 
-      // We need to populate the category data for each transaction inside the groups
-      for (const group of groupedData) {
-        await TransactionModel.populate(group.transactions, {
-          path: 'categoryId',
+      const groupedData = result[0].data;
+      const totalGroups = result[0].metadata[0]?.totalGroups || 0;
+
+      // --- THE FIX ---
+      // 7. After aggregation, populate the nested 'categoryId' in the results.
+      // This is the most reliable way to handle population on aggregated data.
+      if (groupedData.length > 0) {
+        await TransactionModel.populate(groupedData, {
+          path: 'transactions.categoryId',
+          model: 'Category', // Explicitly tell Mongoose which model to use for the lookup
           select: 'name icon color',
         });
       }
 
-      const totalGroups = totalGroupsResult[0]?.totalGroups || 0;
-
       res.status(200).json({
-        type: 'grouped', // Tell the frontend this is grouped data
-        data: groupedData.map((g) => ({
-          period: g._id,
-          totalCredit: g.totalCredit,
-          totalDebit: g.totalDebit,
-          transactions: g.transactions,
-        })),
+        type: 'grouped',
+        data: groupedData.map(
+          (g: {
+            _id: any;
+            totalCredit: any;
+            totalDebit: any;
+            transactions: any;
+          }) => ({
+            period: g._id,
+            totalCredit: g.totalCredit,
+            totalDebit: g.totalDebit,
+            transactions: g.transactions, // This data is now correctly populated
+          })
+        ),
         pagination: {
           currentPage: pageNum,
           totalPages: Math.ceil(totalGroups / limitNum),
