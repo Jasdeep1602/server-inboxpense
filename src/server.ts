@@ -16,6 +16,7 @@ import { defaultCategories } from './data/defaultCategories';
 import apiRoutes from './routes/api.routes';
 import mappingRoutes from './routes/mapping.routes';
 import categoryRoutes from './routes/category.routes';
+import summaryRoutes from './routes/summary.routes';
 
 // Load environment variables
 dotenv.config();
@@ -146,6 +147,7 @@ app.get(
 app.use('/api', apiRoutes);
 app.use('/api/mappings', mappingRoutes);
 app.use('/api/categories', categoryRoutes);
+app.use('/api/summary', summaryRoutes);
 
 // --- Server Start ---
 app.listen(PORT, () => {
