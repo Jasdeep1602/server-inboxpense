@@ -17,6 +17,7 @@ import apiRoutes from './routes/api.routes';
 import mappingRoutes from './routes/mapping.routes';
 import categoryRoutes from './routes/category.routes';
 import summaryRoutes from './routes/summary.routes';
+import { COLOR_PALETTE } from './data/theme';
 
 // Load environment variables
 dotenv.config();
@@ -71,7 +72,7 @@ passport.use(
           // If user exists, update their details and refresh token
           user.googleRefreshToken = refreshToken || user.googleRefreshToken;
           user.name = profile.displayName;
-          user.picture = profile.photos?.[0].value;
+          user.picture = profile.photos?.[0].value; // This is safe now because the schema is optional
           await user.save();
         } else {
           // If user doesn't exist, create a new one
@@ -80,29 +81,36 @@ passport.use(
             googleId: profile.id,
             email: profile.emails?.[0].value,
             name: profile.displayName,
-            picture: profile.photos?.[0].value,
+            picture: profile.photos?.[0].value, // This is also safe
             googleRefreshToken: refreshToken,
           });
         }
 
-        // --- THIS IS THE NEW LOGIC ---
         // If it was a new user, create the default categories for them.
         if (isNewUser && user) {
           console.log(
             `Creating default categories for new user: ${user.email}`
           );
-          const categoriesToCreate = defaultCategories.map((cat) => ({
-            ...cat,
-            userId: user._id, // Assign the new user's ID to each default category
+
+          // Map over the default data and assign a color from our new, large palette.
+          const categoriesToCreate = defaultCategories.map((cat, index) => ({
+            name: cat.name,
+            icon: cat.icon,
+            matchStrings: cat.matchStrings,
+            isDefault: true, // We ensure this is always true for default categories
+            userId: user._id,
+            // We IGNORE the old color from the defaultCategories file and use our new palette.
+            // The modulo operator (%) ensures we loop back to the start of the palette if we have more categories than colors.
+            color: COLOR_PALETTE[index % COLOR_PALETTE.length],
           }));
 
-          // Use insertMany for efficient bulk creation
           await CategoryModel.insertMany(categoriesToCreate);
         }
-        // --- END NEW LOGIC ---
 
+        // Pass the user object to the next step in the authentication flow
         return done(null, user);
       } catch (error: any) {
+        // If any error occurs, pass it to Passport to handle
         return done(error, undefined);
       }
     }
