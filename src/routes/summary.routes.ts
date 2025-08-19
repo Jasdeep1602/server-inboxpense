@@ -14,8 +14,10 @@ router.get('/spending-by-category', async (req: Request, res: Response) => {
     const userId = req.auth!.sub;
     const source = req.query.source as string;
 
-    // --- THIS IS THE FIX ---
-    // The `matchFilter` object must be defined before it is used.
+    // Get the period from the query, default to '6m' (6 months)
+    const period = (req.query.period as string) || '6m';
+
+    // Base filter object
     const matchFilter: any = {
       userId: new Types.ObjectId(userId),
       type: 'debit',
@@ -25,6 +27,32 @@ router.get('/spending-by-category', async (req: Request, res: Response) => {
     if (source && source.toLowerCase() !== 'all') {
       matchFilter.source = new RegExp(`^${source}$`, 'i');
     }
+
+    // Dynamically set the date filter based on the 'period' parameter
+    if (period !== 'all') {
+      const now = new Date();
+      let startDate: Date;
+      if (period === '30d') {
+        startDate = new Date(
+          Date.UTC(
+            now.getUTCFullYear(),
+            now.getUTCMonth(),
+            now.getUTCDate() - 30
+          )
+        );
+      } else if (period === '3m') {
+        startDate = new Date(
+          Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 2, 1)
+        );
+      } else {
+        // Default to 6m
+        startDate = new Date(
+          Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 5, 1)
+        );
+      }
+      matchFilter.date = { $gte: startDate };
+    }
+
     // --- END FIX ---
 
     const aggregationPipeline: PipelineStage[] = [
