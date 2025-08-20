@@ -135,7 +135,12 @@ app.get(
   }),
   (req: Request, res: Response) => {
     const user = req.user as IUser;
-    const payload = { sub: user._id, email: user.email };
+    const payload = {
+      sub: user._id,
+      email: user.email,
+      name: user.name,
+      picture: user.picture,
+    };
     const token = jwt.sign(payload, process.env.JWT_SECRET!, {
       expiresIn: '1d',
     });
