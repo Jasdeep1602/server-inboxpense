@@ -18,6 +18,7 @@ import mappingRoutes from './routes/mapping.routes';
 import categoryRoutes from './routes/category.routes';
 import summaryRoutes from './routes/summary.routes';
 import { COLOR_PALETTE } from './data/theme';
+import exportRoutes from './routes/export.routes'; // Import the export routes
 
 // Load environment variables
 dotenv.config();
@@ -161,6 +162,7 @@ app.use('/api', apiRoutes);
 app.use('/api/mappings', mappingRoutes);
 app.use('/api/categories', categoryRoutes);
 app.use('/api/summary', summaryRoutes);
+app.use('/api/export', exportRoutes);
 
 // --- Server Start ---
 app.listen(PORT, () => {
