@@ -2,10 +2,10 @@
   "name": "inboxpense",
   "version": "1.0.0",
   "description": "backend for a expense tracker",
-  "main": "server.js",
+  "main": "server.ts",
   "scripts": {
     "build": "tsc",
-    "start": "node dist/server.js",
+    "start": "node dist/server.ts",
     "dev": "nodemon src/server.ts"
   },
   "author": "Kylo Ren",
