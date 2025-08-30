@@ -154,7 +154,7 @@ app.get(
       sameSite: isProduction ? 'none' : 'lax',
       // --- THIS IS THE PERMANENT FIX - PART 2 ---
       // This tells the browser the cookie is valid for the entire site.
-      path: '/',
+      // path: '/',
       // --- END FIX ---
       maxAge: 24 * 60 * 60 * 1000,
     });
