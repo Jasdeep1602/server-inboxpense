@@ -27,7 +27,7 @@ const app = express();
 
 const PORT = process.env.PORT || 3001;
 // Trust the first hop from the Render proxy. This is crucial for secure cookies.
-app.set('trust proxy', 1);
+// app.set('trust proxy', 1);
 
 // --- Middleware Setup ---
 app.use(
@@ -47,8 +47,9 @@ mongoose
   .catch((err) => console.error('❌ MongoDB connection error:', err));
 
 const callbackURL =
-  process.env.RENDER_EXTERNAL_URL + '/auth/google/callback' ||
-  `http://localhost:${PORT}/auth/google/callback`;
+  process.env.NODE_ENV === 'production'
+    ? 'https://inboxpense.onrender.com/auth/google/callback'
+    : `http://localhost:${PORT}/auth/google/callback`;
 
 // --- Passport Google OAuth Strategy ---
 passport.use(
@@ -56,7 +57,7 @@ passport.use(
     {
       clientID: process.env.GOOGLE_CLIENT_ID!,
       clientSecret: process.env.GOOGLE_CLIENT_SECRET!,
-      callbackURL: callbackURL,
+      callbackURL: callbackURL!,
       authorizationURL: 'https://accounts.google.com/o/oauth2/v2/auth',
       tokenURL: 'https://oauth2.googleapis.com/token',
       scope: [
@@ -158,7 +159,7 @@ app.get(
       httpOnly: true,
       secure: isProduction,
       sameSite: isProduction ? 'none' : 'lax',
-      path: '/',
+      // path: '/',
       maxAge: 24 * 60 * 60 * 1000,
     });
 
