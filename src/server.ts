@@ -26,7 +26,7 @@ dotenv.config();
 const app = express();
 const PORT = process.env.PORT || 3001;
 
-// Trust the first hop from the Render proxy. This is crucial for secure cookies.
+// Trust the proxy to handle secure connection headers correctly
 app.set('trust proxy', 1);
 
 // --- Middleware Setup ---
@@ -46,7 +46,7 @@ mongoose
   .then(() => console.log('✅ MongoDB connected successfully.'))
   .catch((err) => console.error('❌ MongoDB connection error:', err));
 
-// Determine the callback URL dynamically based on the environment.
+// Dynamically determine the callback URL
 const callbackURL = process.env.RENDER_EXTERNAL_URL
   ? `${process.env.RENDER_EXTERNAL_URL}/auth/google/callback`
   : `http://localhost:${PORT}/auth/google/callback`;
@@ -58,14 +58,11 @@ passport.use(
       clientID: process.env.GOOGLE_CLIENT_ID!,
       clientSecret: process.env.GOOGLE_CLIENT_SECRET!,
       callbackURL: callbackURL,
-      authorizationURL: 'https://accounts.google.com/o/oauth2/v2/auth',
-      tokenURL: 'https://oauth2.googleapis.com/token',
       scope: [
         'email',
         'profile',
         'https://www.googleapis.com/auth/drive.readonly',
       ],
-      passReqToCallback: false,
     },
     async (
       accessToken: string,
@@ -122,6 +119,7 @@ app.get(
   passport.authenticate('google', {
     accessType: 'offline',
     prompt: 'consent',
+    session: false,
   })
 );
 
@@ -129,7 +127,7 @@ app.get(
   '/auth/google/callback',
   passport.authenticate('google', {
     session: false,
-    failureRedirect: '/login-failure',
+    failureRedirect: `${process.env.FRONTEND_URL}?error=authentication-failed`,
   }),
   (req: Request, res: Response) => {
     const user = req.user as IUser;
@@ -143,23 +141,11 @@ app.get(
       expiresIn: '1d',
     });
 
-    const isProduction = process.env.NODE_ENV === 'production';
-
     // --- THIS IS THE PERMANENT FIX ---
-    // Define the cookie domain based on the environment
-    const cookieDomain = isProduction ? '.onrender.com' : 'localhost';
-
-    res.cookie('jwt', token, {
-      httpOnly: true,
-      secure: isProduction,
-      sameSite: isProduction ? 'none' : 'lax',
-      path: '/',
-      domain: cookieDomain, // Explicitly set the domain
-      maxAge: 24 * 60 * 60 * 1000,
-    });
+    // Instead of setting a cookie, redirect to a special frontend route
+    // with the token as a URL parameter. The frontend will then handle the cookie.
+    res.redirect(`${process.env.FRONTEND_URL}/auth/callback?token=${token}`);
     // --- END FIX ---
-
-    res.redirect(`${process.env.FRONTEND_URL}/dashboard`);
   }
 );
 
