@@ -26,12 +26,8 @@ dotenv.config();
 const app = express();
 const PORT = process.env.PORT || 3001;
 
-// --- THIS IS THE PERMANENT FIX - PART 1 ---
-// It is MANDATORY to trust the proxy when deployed on a service like Render.
-// This allows Express to correctly determine the protocol (http vs https)
-// and set Secure cookies properly.
+// Trust the first hop from the Render proxy. This is crucial for secure cookies.
 app.set('trust proxy', 1);
-// --- END FIX ---
 
 // --- Middleware Setup ---
 app.use(
@@ -50,7 +46,7 @@ mongoose
   .then(() => console.log('✅ MongoDB connected successfully.'))
   .catch((err) => console.error('❌ MongoDB connection error:', err));
 
-// A more robust way to define the callback URL
+// Determine the callback URL dynamically based on the environment.
 const callbackURL = process.env.RENDER_EXTERNAL_URL
   ? `${process.env.RENDER_EXTERNAL_URL}/auth/google/callback`
   : `http://localhost:${PORT}/auth/google/callback`;
@@ -148,16 +144,20 @@ app.get(
     });
 
     const isProduction = process.env.NODE_ENV === 'production';
+
+    // --- THIS IS THE PERMANENT FIX ---
+    // Define the cookie domain based on the environment
+    const cookieDomain = isProduction ? '.onrender.com' : 'localhost';
+
     res.cookie('jwt', token, {
       httpOnly: true,
       secure: isProduction,
       sameSite: isProduction ? 'none' : 'lax',
-      // --- THIS IS THE PERMANENT FIX - PART 2 ---
-      // This tells the browser the cookie is valid for the entire site.
-      // path: '/',
-      // --- END FIX ---
+      path: '/',
+      domain: cookieDomain, // Explicitly set the domain
       maxAge: 24 * 60 * 60 * 1000,
     });
+    // --- END FIX ---
 
     res.redirect(`${process.env.FRONTEND_URL}/dashboard`);
   }
