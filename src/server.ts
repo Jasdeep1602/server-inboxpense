@@ -24,7 +24,10 @@ import exportRoutes from './routes/export.routes'; // Import the export routes
 dotenv.config();
 
 const app = express();
+
 const PORT = process.env.PORT || 3001;
+// Trust the first hop from the Render proxy. This is crucial for secure cookies.
+app.set('trust proxy', 1);
 
 // --- Middleware Setup ---
 app.use(
@@ -150,13 +153,13 @@ app.get(
       expiresIn: '1d',
     });
 
+    const isProduction = process.env.NODE_ENV === 'production';
     res.cookie('jwt', token, {
       httpOnly: true,
-      secure: true, // Set to true in production
-      sameSite: 'none', // Must be 'none' for cross-domain cookies
+      secure: isProduction,
+      sameSite: isProduction ? 'none' : 'lax',
       maxAge: 24 * 60 * 60 * 1000,
     });
-    // --- END FIX ---
 
     res.redirect(`${process.env.FRONTEND_URL}/dashboard`);
   }
