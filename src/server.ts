@@ -44,7 +44,7 @@ mongoose
   .catch((err) => console.error('❌ MongoDB connection error:', err));
 
 const callbackURL =
-  process.env.RENDER_EXTERNAL_URL ||
+  process.env.RENDER_EXTERNAL_URL + '/auth/google/callback' ||
   `http://localhost:${PORT}/auth/google/callback`;
 
 // --- Passport Google OAuth Strategy ---
