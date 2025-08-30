@@ -150,12 +150,16 @@ app.get(
       expiresIn: '1d',
     });
 
+    // --- THIS IS THE FIX ---
+    // For production (deployed), cookies must be secure and allow cross-site usage.
+    const isProduction = process.env.NODE_ENV === 'production';
     res.cookie('jwt', token, {
       httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: 'lax',
+      secure: isProduction, // Set to true in production
+      sameSite: isProduction ? 'none' : 'lax', // Must be 'none' for cross-domain cookies
       maxAge: 24 * 60 * 60 * 1000,
     });
+    // --- END FIX ---
 
     res.redirect(`${process.env.FRONTEND_URL}/dashboard`);
   }
