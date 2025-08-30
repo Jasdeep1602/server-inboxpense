@@ -43,13 +43,17 @@ mongoose
   .then(() => console.log('✅ MongoDB connected successfully.'))
   .catch((err) => console.error('❌ MongoDB connection error:', err));
 
+const callbackURL =
+  process.env.RENDER_EXTERNAL_URL ||
+  `http://localhost:${PORT}/auth/google/callback`;
+
 // --- Passport Google OAuth Strategy ---
 passport.use(
   new GoogleStrategy(
     {
       clientID: process.env.GOOGLE_CLIENT_ID!,
       clientSecret: process.env.GOOGLE_CLIENT_SECRET!,
-      callbackURL: process.env.GOOGLE_CALLBACK_URL!,
+      callbackURL: callbackURL,
       authorizationURL: 'https://accounts.google.com/o/oauth2/v2/auth',
       tokenURL: 'https://oauth2.googleapis.com/token',
       scope: [
