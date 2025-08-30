@@ -18,16 +18,20 @@ import mappingRoutes from './routes/mapping.routes';
 import categoryRoutes from './routes/category.routes';
 import summaryRoutes from './routes/summary.routes';
 import { COLOR_PALETTE } from './data/theme';
-import exportRoutes from './routes/export.routes'; // Import the export routes
+import exportRoutes from './routes/export.routes';
 
 // Load environment variables
 dotenv.config();
 
 const app = express();
-
 const PORT = process.env.PORT || 3001;
-// Trust the first hop from the Render proxy. This is crucial for secure cookies.
-// app.set('trust proxy', 1);
+
+// --- THIS IS THE PERMANENT FIX - PART 1 ---
+// It is MANDATORY to trust the proxy when deployed on a service like Render.
+// This allows Express to correctly determine the protocol (http vs https)
+// and set Secure cookies properly.
+app.set('trust proxy', 1);
+// --- END FIX ---
 
 // --- Middleware Setup ---
 app.use(
@@ -46,10 +50,10 @@ mongoose
   .then(() => console.log('✅ MongoDB connected successfully.'))
   .catch((err) => console.error('❌ MongoDB connection error:', err));
 
-const callbackURL =
-  process.env.NODE_ENV === 'production'
-    ? 'https://inboxpense.onrender.com/auth/google/callback'
-    : `http://localhost:${PORT}/auth/google/callback`;
+// A more robust way to define the callback URL
+const callbackURL = process.env.RENDER_EXTERNAL_URL
+  ? `${process.env.RENDER_EXTERNAL_URL}/auth/google/callback`
+  : `http://localhost:${PORT}/auth/google/callback`;
 
 // --- Passport Google OAuth Strategy ---
 passport.use(
@@ -57,7 +61,7 @@ passport.use(
     {
       clientID: process.env.GOOGLE_CLIENT_ID!,
       clientSecret: process.env.GOOGLE_CLIENT_SECRET!,
-      callbackURL: callbackURL!,
+      callbackURL: callbackURL,
       authorizationURL: 'https://accounts.google.com/o/oauth2/v2/auth',
       tokenURL: 'https://oauth2.googleapis.com/token',
       scope: [
@@ -75,51 +79,41 @@ passport.use(
     ) => {
       try {
         let user = await UserModel.findOne({ googleId: profile.id });
-        let isNewUser = false; // Flag to track if this is a new user
+        let isNewUser = false;
 
         if (user) {
-          // If user exists, update their details and refresh token
           user.googleRefreshToken = refreshToken || user.googleRefreshToken;
           user.name = profile.displayName;
-          user.picture = profile.photos?.[0].value; // This is safe now because the schema is optional
+          user.picture = profile.photos?.[0].value;
           await user.save();
         } else {
-          // If user doesn't exist, create a new one
-          isNewUser = true; // Set the flag to true
+          isNewUser = true;
           user = await UserModel.create({
             googleId: profile.id,
             email: profile.emails?.[0].value,
             name: profile.displayName,
-            picture: profile.photos?.[0].value, // This is also safe
+            picture: profile.photos?.[0].value,
             googleRefreshToken: refreshToken,
           });
         }
 
-        // If it was a new user, create the default categories for them.
         if (isNewUser && user) {
           console.log(
             `Creating default categories for new user: ${user.email}`
           );
-
-          // Map over the default data and assign a color from our new, large palette.
           const categoriesToCreate = defaultCategories.map((cat, index) => ({
             name: cat.name,
             icon: cat.icon,
             matchStrings: cat.matchStrings,
-            isDefault: true, // We ensure this is always true for default categories
+            isDefault: true,
             userId: user._id,
-            // We IGNORE the old color from the defaultCategories file and use our new palette.
-            // The modulo operator (%) ensures we loop back to the start of the palette if we have more categories than colors.
             color: COLOR_PALETTE[index % COLOR_PALETTE.length],
           }));
-
           await CategoryModel.insertMany(categoriesToCreate);
         }
 
-        // Pass the user object to the next step in the authentication flow
         return done(null, user);
       } catch (error: any) {
-        // If any error occurs, pass it to Passport to handle
         return done(error, undefined);
       }
     }
@@ -127,7 +121,6 @@ passport.use(
 );
 
 // --- Authentication Routes ---
-
 app.get(
   '/auth/google',
   passport.authenticate('google', {
@@ -140,7 +133,7 @@ app.get(
   '/auth/google/callback',
   passport.authenticate('google', {
     session: false,
-    failureRedirect: '/login-failure', // You can create a simple frontend route for this
+    failureRedirect: '/login-failure',
   }),
   (req: Request, res: Response) => {
     const user = req.user as IUser;
@@ -159,7 +152,10 @@ app.get(
       httpOnly: true,
       secure: isProduction,
       sameSite: isProduction ? 'none' : 'lax',
-      // path: '/',
+      // --- THIS IS THE PERMANENT FIX - PART 2 ---
+      // This tells the browser the cookie is valid for the entire site.
+      path: '/',
+      // --- END FIX ---
       maxAge: 24 * 60 * 60 * 1000,
     });
 
