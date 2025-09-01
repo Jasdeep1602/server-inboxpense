@@ -237,9 +237,11 @@ router.post(
       });
       const latestFile = fileRes.data.files?.[0];
       if (!latestFile || !latestFile.id) {
-        return res
-          .status(404)
-          .json({ message: `No SMS backup file found in folder '${source}'.` });
+        return res.status(200).json({
+          // Changed from 404 to 200
+          message: `No SMS backup file found in folder '${source}'.`,
+          status: 'no_file', // Add a status for clearer client-side handling
+        });
       }
 
       const fileContentRes = await drive.files.get({
