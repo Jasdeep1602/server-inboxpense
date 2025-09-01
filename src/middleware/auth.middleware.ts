@@ -1,13 +1,20 @@
 // D:/expense/server/src/middleware/auth.middleware.ts
 
 import { Request, Response, NextFunction } from 'express';
-import jwt, { JwtPayload } from 'jsonwebtoken';
+import jwt from 'jsonwebtoken';
 import { Types } from 'mongoose';
 
+// 1. Define our own JWT payload structure to ensure `sub` exists
+interface CustomJwtPayload extends jwt.JwtPayload {
+  sub: string;
+  email: string;
+}
+
+// 2. Extend the Express Request type using declaration merging
 declare global {
   namespace Express {
     interface Request {
-      auth?: JwtPayload;
+      auth?: CustomJwtPayload;
     }
   }
 }
@@ -19,33 +26,36 @@ export const authMiddleware = async (
 ) => {
   let token: string | undefined;
 
-  // --- THIS IS THE FIX ---
-  // 1. First, check for an Authorization header (for client-side requests)
   if (
     req.headers.authorization &&
     req.headers.authorization.startsWith('Bearer ')
   ) {
     token = req.headers.authorization.split(' ')[1];
-  }
-  // 2. If no header, fall back to checking for the cookie (for server-side requests)
-  else if (req.cookies.jwt) {
+  } else if (req.cookies.jwt) {
     token = req.cookies.jwt;
   }
-  // --- END FIX ---
 
   if (!token) {
     return res.status(401).json({ message: 'Unauthorized: No token provided' });
   }
 
   try {
-    const decoded = jwt.verify(token, process.env.JWT_SECRET!) as JwtPayload;
+    // We now cast to our custom, stricter payload type
+    const decoded = jwt.verify(
+      token,
+      process.env.JWT_SECRET!
+    ) as CustomJwtPayload;
 
+    // --- THIS IS THE FIX ---
+    // Now we check for the existence of `sub` before validating it.
     if (!decoded.sub || !Types.ObjectId.isValid(decoded.sub)) {
       return res
         .status(401)
         .json({ message: 'Unauthorized: Invalid token payload' });
     }
+    // --- END FIX ---
 
+    // This will now work because of the `declare global` block
     req.auth = decoded;
     next();
   } catch (error) {
