@@ -24,7 +24,7 @@ import exportRoutes from './routes/export.routes';
 dotenv.config();
 
 const app = express();
-const PORT = process.env.PORT || 3001;
+const PORT = Number(process.env.PORT) || 3001;
 
 // Trust the proxy to handle secure connection headers correctly
 app.set('trust proxy', 1);
@@ -157,6 +157,6 @@ app.use('/api/summary', summaryRoutes);
 app.use('/api/export', exportRoutes);
 
 // --- Server Start ---
-app.listen(PORT, () => {
+app.listen(PORT, '0.0.0.0', () => {
   console.log(`🚀 Server is running at http://localhost:${PORT}`);
 });
