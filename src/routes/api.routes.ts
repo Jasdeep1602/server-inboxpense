@@ -16,27 +16,26 @@ const router = Router();
 function extractTransactionsFromSMS(smsList: any[], source: string) {
   const transactions = [];
 
-  // --- Keyword Lists for Accurate Parsing ---
+  // --- FIX: Broader and more accurate keywords ---
+  // These lists are now more robust to catch single-word and common variations.
   const DEBIT_KEYWORDS = [
-    'debited for',
-    'spent on',
-    'purchase of',
-    'payment of',
+    'spent',
+    'debited',
+    'purchase',
+    'payment',
     'sent to',
-    'charged on',
+    'charged',
     'withdrawn',
-    'debited by',
-    'payment made',
+    'paid',
   ];
   const CREDIT_KEYWORDS = [
-    'credited with',
-    'credited for',
+    'credited',
     'received from',
     'deposited',
-    'refund of',
-    'credited by',
+    'refund', // "refund of" is covered by this
+    'received',
+    'added',
   ];
-  // Keywords that automatically REJECT a message to reduce noise
   const REJECTION_KEYWORDS = [
     'offer',
     'earn',
@@ -49,16 +48,17 @@ function extractTransactionsFromSMS(smsList: any[], source: string) {
     'statement',
     'due on',
     'e-statement',
+    'outstanding',
+    'unpaid',
+    'overdue',
   ];
+  // --- END FIX ---
 
-  // High-confidence regex that requires a currency symbol
   const amountRegex = /(?:Rs\.?|INR|₹)\s*([\d,]+\.?\d*)/i;
-
-  // Other regexes for identifying the transaction mode
   const upiIdRegex = /\b[\w.-]+@[\w.-]+\b/i;
   const cardRegex = /\b(?:card|credit card|debit card)\s.*?(?:\*|x)\d{4}/i;
-  const bankRegex = /\b(?:A\/c|account)\s.*?(?:\*|x)\d{4}/i;
-  const failedRegex = /\b(failed|reversed|refund|unsuccessful|declined)\b/i;
+  const bankRegex = /\b(?:A\/c|account|ac)\s.*?(?:\*|x)\d{4}/i;
+  const failedRegex = /\b(failed|reversed|unsuccessful|declined)\b/i;
 
   const upiAppPatterns: { [key: string]: RegExp } = {
     GPay: /\b(Google Pay|GPay)\b/i,
@@ -68,46 +68,41 @@ function extractTransactionsFromSMS(smsList: any[], source: string) {
 
   for (const sms of smsList) {
     const originalBody = sms['@_body'] || '';
-    // Use a lowercase version for keyword matching, but store the original
     const lcBody = originalBody.replace(/\s+/g, ' ').trim().toLowerCase();
     const smsDate = sms['@_date'];
 
     if (!lcBody || !smsDate) continue;
 
-    // --- Step 1: Noise Rejection ---
-    // If the message contains a word from our rejection list, skip it immediately.
     if (REJECTION_KEYWORDS.some((keyword) => lcBody.includes(keyword))) {
       continue;
     }
 
-    // --- Step 2: Amount Parsing ---
-    // If we can't find a clear amount with a currency symbol, it's likely not a transaction.
     const amountMatch = lcBody.match(amountRegex);
     if (!amountMatch) continue;
 
     const amount = parseFloat(amountMatch[1].replace(/,/g, ''));
-    if (isNaN(amount)) continue;
+    if (isNaN(amount) || amount === 0) continue; // Also ignore zero-amount transactions
 
-    // --- Step 3: Correct Debit/Credit Identification ---
-    // This logic now correctly prioritizes debit keywords.
+    // --- FIX: Improved Debit/Credit Identification Logic ---
+    // The order here is important. We check for credit/refunds first to avoid
+    // misclassifying a "refund of a debit" as a debit.
     let type: 'credit' | 'debit' | null = null;
+    const isFailed = failedRegex.test(lcBody);
 
-    if (DEBIT_KEYWORDS.some((keyword) => lcBody.includes(keyword))) {
-      type = 'debit';
-    } else if (CREDIT_KEYWORDS.some((keyword) => lcBody.includes(keyword))) {
+    if (CREDIT_KEYWORDS.some((keyword) => lcBody.includes(keyword))) {
       type = 'credit';
+    } else if (DEBIT_KEYWORDS.some((keyword) => lcBody.includes(keyword))) {
+      type = 'debit';
     }
 
-    // If we still can't determine a clear type, skip the message.
+    // If we can't determine a type, it's probably not a transaction we want.
     if (!type) continue;
+    // --- END FIX ---
 
-    // --- Step 4: Mode Identification ---
-    let mode = 'Other'; // Default to 'Other' for safety
+    let mode = 'Other';
     if (
       upiIdRegex.test(lcBody) ||
-      upiAppPatterns.GPay.test(lcBody) ||
-      upiAppPatterns.PhonePe.test(lcBody) ||
-      upiAppPatterns.Paytm.test(lcBody)
+      Object.values(upiAppPatterns).some((pattern) => pattern.test(lcBody))
     ) {
       mode = 'UPI';
     } else if (cardRegex.test(lcBody)) {
@@ -119,12 +114,12 @@ function extractTransactionsFromSMS(smsList: any[], source: string) {
     transactions.push({
       smsId: smsDate,
       date: new Date(parseInt(smsDate)),
-      body: originalBody, // Store the original, case-sensitive body
+      body: originalBody,
       amount,
-      type, // This will now be the correct type
+      type,
       mode,
       source,
-      status: failedRegex.test(lcBody) ? 'failed' : 'success',
+      status: isFailed ? 'failed' : 'success',
     });
   }
   return transactions;
