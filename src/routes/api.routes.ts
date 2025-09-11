@@ -16,8 +16,6 @@ const router = Router();
 function extractTransactionsFromSMS(smsList: any[], source: string) {
   const transactions = [];
 
-  // --- FIX: Broader and more accurate keywords ---
-  // These lists are now more robust to catch single-word and common variations.
   const DEBIT_KEYWORDS = [
     'spent',
     'debited',
@@ -32,7 +30,7 @@ function extractTransactionsFromSMS(smsList: any[], source: string) {
     'credited',
     'received from',
     'deposited',
-    'refund', // "refund of" is covered by this
+    'refund',
     'received',
     'added',
   ];
@@ -52,19 +50,15 @@ function extractTransactionsFromSMS(smsList: any[], source: string) {
     'unpaid',
     'overdue',
   ];
-  // --- END FIX ---
 
   const amountRegex = /(?:Rs\.?|INR|₹)\s*([\d,]+\.?\d*)/i;
-  const upiIdRegex = /\b[\w.-]+@[\w.-]+\b/i;
-  const cardRegex = /\b(?:card|credit card|debit card)\s.*?(?:\*|x)\d{4}/i;
-  const bankRegex = /\b(?:A\/c|account|ac)\s.*?(?:\*|x)\d{4}/i;
   const failedRegex = /\b(failed|reversed|unsuccessful|declined)\b/i;
 
-  const upiAppPatterns: { [key: string]: RegExp } = {
-    GPay: /\b(Google Pay|GPay)\b/i,
-    PhonePe: /\b(PhonePe)\b/i,
-    Paytm: /\b(Paytm)\b/i,
-  };
+  // --- THIS IS THE FIX: New, more specific regex for card types ---
+  const creditCardRegex = /\bcredit card\b/i;
+  const debitCardRegex = /\bdebit card\b/i;
+  // We no longer need the generic 'card', 'upi', or 'bank' regexes for this logic.
+  // --- END FIX ---
 
   for (const sms of smsList) {
     const originalBody = sms['@_body'] || '';
@@ -81,11 +75,8 @@ function extractTransactionsFromSMS(smsList: any[], source: string) {
     if (!amountMatch) continue;
 
     const amount = parseFloat(amountMatch[1].replace(/,/g, ''));
-    if (isNaN(amount) || amount === 0) continue; // Also ignore zero-amount transactions
+    if (isNaN(amount) || amount === 0) continue;
 
-    // --- FIX: Improved Debit/Credit Identification Logic ---
-    // The order here is important. We check for credit/refunds first to avoid
-    // misclassifying a "refund of a debit" as a debit.
     let type: 'credit' | 'debit' | null = null;
     const isFailed = failedRegex.test(lcBody);
 
@@ -95,21 +86,16 @@ function extractTransactionsFromSMS(smsList: any[], source: string) {
       type = 'debit';
     }
 
-    // If we can't determine a type, it's probably not a transaction we want.
     if (!type) continue;
-    // --- END FIX ---
 
-    let mode = 'Other';
-    if (
-      upiIdRegex.test(lcBody) ||
-      Object.values(upiAppPatterns).some((pattern) => pattern.test(lcBody))
-    ) {
-      mode = 'UPI';
-    } else if (cardRegex.test(lcBody)) {
-      mode = 'Card';
-    } else if (bankRegex.test(lcBody)) {
-      mode = 'Bank';
+    // --- THIS IS THE FIX: Simplified and more accurate mode identification ---
+    let mode = 'Other'; // Default to 'Other'
+    if (creditCardRegex.test(lcBody)) {
+      mode = 'Credit Card';
+    } else if (debitCardRegex.test(lcBody)) {
+      mode = 'Debit Card';
     }
+    // --- END FIX ---
 
     transactions.push({
       smsId: smsDate,
@@ -117,7 +103,7 @@ function extractTransactionsFromSMS(smsList: any[], source: string) {
       body: originalBody,
       amount,
       type,
-      mode,
+      mode, // This will now be 'Credit Card', 'Debit Card', or 'Other'
       source,
       status: isFailed ? 'failed' : 'success',
     });
@@ -390,6 +376,8 @@ router.get(
         limit = '10',
         source = 'All',
         groupBy = 'none',
+        from,
+        to,
       } = req.query as { [key: string]: string };
 
       const pageNum = parseInt(page);
@@ -400,6 +388,16 @@ router.get(
       const matchFilter: any = { userId: new Types.ObjectId(userId) };
       if (source && source.toLowerCase() !== 'all') {
         matchFilter.source = new RegExp(`^${source}$`, 'i');
+      }
+
+      if (from && to && groupBy === 'none') {
+        const startDate = new Date(from);
+        startDate.setUTCHours(0, 0, 0, 0); // Start of the day
+
+        const endDate = new Date(to);
+        endDate.setUTCHours(23, 59, 59, 999); // End of the day
+
+        matchFilter.date = { $gte: startDate, $lte: endDate };
       }
 
       // --- Handle the 'none' groupBy case (simple list) separately for clarity ---
