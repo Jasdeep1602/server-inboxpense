@@ -2,11 +2,12 @@ import { Schema, model, Document, Types } from 'mongoose';
 
 export interface ICategory extends Document {
   userId: Types.ObjectId;
-  name: string; // e.g., "Food", "Shopping"
-  icon: string; // We can store the name of an icon (e.g., from lucide-react)
-  color: string; // A hex or tailwind color name
-  matchStrings: string[]; // Keywords to auto-categorize transactions
+  name: string;
+  icon: string;
+  color: string;
+  matchStrings: string[];
   isDefault: boolean;
+  parentId: Types.ObjectId | null; // <-- ADD THIS
 }
 
 const CategorySchema = new Schema<ICategory>(
@@ -16,7 +17,12 @@ const CategorySchema = new Schema<ICategory>(
     icon: { type: String, required: true },
     color: { type: String, default: '#888888' },
     matchStrings: [{ type: String }],
-    isDefault: { type: Boolean, default: false }, // <-- ADD THIS
+    isDefault: { type: Boolean, default: false },
+    // --- THIS IS THE FIX ---
+    // A category can have a parent, which is another category.
+    // If null, it's a top-level parent category.
+    parentId: { type: Schema.Types.ObjectId, ref: 'Category', default: null },
+    // --- END FIX ---
   },
   { timestamps: true }
 );

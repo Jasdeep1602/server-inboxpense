@@ -2,7 +2,7 @@ import { Schema, model, Document, Types } from 'mongoose';
 
 export interface ITransaction extends Document {
   userId: Types.ObjectId;
-  categoryId?: Types.ObjectId; // The interface is correct
+  subcategoryId?: Types.ObjectId; // <-- RENAME THIS
   smsId: string;
   source: string;
   date: Date;
@@ -12,6 +12,7 @@ export interface ITransaction extends Document {
   mode: string;
   status?: 'success' | 'failed';
   description?: string;
+  details?: string;
 }
 
 const TransactionSchema = new Schema<ITransaction>(
@@ -19,9 +20,9 @@ const TransactionSchema = new Schema<ITransaction>(
     userId: { type: Schema.Types.ObjectId, ref: 'User', required: true },
 
     // --- THIS IS THE FIX ---
-    // We must add the field to the schema definition itself.
-    // It's an ObjectId that 'ref'erences the 'Category' model.
-    categoryId: { type: Schema.Types.ObjectId, ref: 'Category' },
+    // Renamed from categoryId to subcategoryId for clarity.
+    // A transaction is always assigned to a subcategory.
+    subcategoryId: { type: Schema.Types.ObjectId, ref: 'Category' },
     // --- END FIX ---
 
     smsId: { type: String, required: true },
@@ -33,11 +34,11 @@ const TransactionSchema = new Schema<ITransaction>(
     mode: { type: String, required: true },
     status: { type: String, enum: ['success', 'failed'] },
     description: { type: String },
+    details: { type: String },
   },
   { timestamps: true }
 );
 
-// This index is correct and very important
 TransactionSchema.index({ userId: 1, source: 1, smsId: 1 }, { unique: true });
 
 export default model<ITransaction>('Transaction', TransactionSchema);
