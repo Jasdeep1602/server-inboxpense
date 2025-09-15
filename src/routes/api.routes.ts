@@ -302,15 +302,11 @@ router.post(
   async (req: Request, res: Response) => {
     try {
       const userId = req.auth!.sub;
-      const { amount, type, date, description, mode, source, categoryId } =
+      const { amount, type, date, description, mode, source, subcategoryId } =
         req.body;
 
-      // --- Data Validation ---
       if (!amount || !type || !date || !mode || !source) {
-        return res.status(400).json({
-          message:
-            'Missing required fields: amount, type, date, mode, and source are required.',
-        });
+        return res.status(400).json({ message: 'Missing required fields.' });
       }
       if (typeof amount !== 'number' || amount <= 0) {
         return res
@@ -322,8 +318,11 @@ router.post(
           .status(400)
           .json({ message: 'Type must be either "debit" or "credit".' });
       }
-      if (categoryId && !Types.ObjectId.isValid(categoryId)) {
-        return res.status(400).json({ message: 'Invalid category ID format.' });
+      // Validate the new field name
+      if (subcategoryId && !Types.ObjectId.isValid(subcategoryId)) {
+        return res
+          .status(400)
+          .json({ message: 'Invalid subcategory ID format.' });
       }
       // --- End Validation ---
 
@@ -345,7 +344,7 @@ router.post(
         description,
         mode,
         source,
-        categoryId: categoryId || null,
+        subcategoryId: subcategoryId || null,
         status: 'success', // Manual entries are always successful
       });
 
@@ -404,7 +403,7 @@ router.get(
       if (groupBy === 'none') {
         const [transactions, totalTransactions] = await Promise.all([
           TransactionModel.find(matchFilter)
-            .populate('categoryId', 'name icon color')
+            .populate('subcategoryId', 'name icon color')
             .sort({ date: -1 })
             .skip(skip)
             .limit(limitNum),
@@ -478,7 +477,7 @@ router.get(
       // This is the most reliable way to handle population on aggregated data.
       if (groupedData.length > 0) {
         await TransactionModel.populate(groupedData, {
-          path: 'transactions.categoryId',
+          path: 'transactions.subcategoryId',
           model: 'Category', // Explicitly tell Mongoose which model to use for the lookup
           select: 'name icon color',
         });
@@ -565,7 +564,7 @@ router.patch(
   async (req: Request, res: Response) => {
     try {
       const { id } = req.params;
-      const { categoryId } = req.body; // Can be a valid ID string or null
+      const { subcategoryId } = req.body; // Can be a valid ID string or null
       const userId = req.auth!.sub;
 
       if (!Types.ObjectId.isValid(id)) {
@@ -573,19 +572,19 @@ router.patch(
           .status(400)
           .json({ message: 'Invalid transaction ID format.' });
       }
-      if (categoryId && !Types.ObjectId.isValid(categoryId)) {
+      if (subcategoryId && !Types.ObjectId.isValid(subcategoryId)) {
         return res.status(400).json({ message: 'Invalid category ID format.' });
       }
 
-      const updateOperation = categoryId
-        ? { $set: { categoryId: categoryId } }
-        : { $unset: { categoryId: '' } };
+      const updateOperation = subcategoryId
+        ? { $set: { subcategoryId: subcategoryId } }
+        : { $unset: { subcategoryId: '' } };
 
       const updatedTransaction = await TransactionModel.findOneAndUpdate(
         { _id: id, userId: userId },
         updateOperation,
         { new: true }
-      ).populate('categoryId', 'name icon color');
+      ).populate('subcategoryId', 'name icon color');
 
       if (!updatedTransaction) {
         return res.status(404).json({
