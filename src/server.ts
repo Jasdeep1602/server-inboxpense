@@ -11,13 +11,10 @@ import jwt from 'jsonwebtoken';
 import cookieParser from 'cookie-parser';
 import cors from 'cors';
 import UserModel, { IUser } from './models/user.model';
-import CategoryModel from './models/category.model';
-import { defaultCategories } from './data/defaultCategories';
 import apiRoutes from './routes/api.routes';
 import mappingRoutes from './routes/mapping.routes';
 import categoryRoutes from './routes/category.routes';
 import summaryRoutes from './routes/summary.routes';
-import { COLOR_PALETTE } from './data/theme';
 import exportRoutes from './routes/export.routes';
 
 // Load environment variables
@@ -72,7 +69,6 @@ passport.use(
     ) => {
       try {
         let user = await UserModel.findOne({ googleId: profile.id });
-        let isNewUser = false;
 
         if (user) {
           user.googleRefreshToken = refreshToken || user.googleRefreshToken;
@@ -80,7 +76,6 @@ passport.use(
           user.picture = profile.photos?.[0].value;
           await user.save();
         } else {
-          isNewUser = true;
           user = await UserModel.create({
             googleId: profile.id,
             email: profile.emails?.[0].value,
@@ -90,20 +85,7 @@ passport.use(
           });
         }
 
-        if (isNewUser && user) {
-          console.log(
-            `Creating default categories for new user: ${user.email}`
-          );
-          const categoriesToCreate = defaultCategories.map((cat, index) => ({
-            name: cat.name,
-            icon: cat.icon,
-            matchStrings: cat.matchStrings,
-            isDefault: true,
-            userId: user._id,
-            color: COLOR_PALETTE[index % COLOR_PALETTE.length],
-          }));
-          await CategoryModel.insertMany(categoriesToCreate);
-        }
+        // The logic for creating default categories has been removed.
 
         return done(null, user);
       } catch (error: any) {

@@ -16,7 +16,7 @@ type PlainCategory = {
   icon: string;
   color: string;
   matchStrings: string[];
-  isDefault: boolean;
+  // isDefault: boolean;
   parentId: string | null; // Changed from Types.ObjectId
 };
 
@@ -124,11 +124,6 @@ router.put('/:id', async (req: Request, res: Response) => {
     if (!categoryToUpdate) {
       return res.status(404).json({ message: 'Category not found.' });
     }
-    if (categoryToUpdate.isDefault && categoryToUpdate.parentId === null) {
-      return res
-        .status(403)
-        .json({ message: 'Default parent categories cannot be edited.' });
-    }
 
     categoryToUpdate.name = name || categoryToUpdate.name;
     categoryToUpdate.icon = icon || categoryToUpdate.icon;
@@ -157,11 +152,6 @@ router.delete('/:id', async (req: Request, res: Response) => {
     const categoryToDelete = await CategoryModel.findOne({ _id: id, userId });
     if (!categoryToDelete) {
       return res.status(404).json({ message: 'Category not found.' });
-    }
-    if (categoryToDelete.isDefault) {
-      return res
-        .status(403)
-        .json({ message: 'Default categories cannot be deleted.' });
     }
 
     let idsToDelete = [categoryToDelete._id];

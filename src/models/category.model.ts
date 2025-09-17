@@ -6,7 +6,7 @@ export interface ICategory extends Document {
   icon: string;
   color: string;
   matchStrings: string[];
-  isDefault: boolean;
+  // isDefault: boolean;
   parentId: Types.ObjectId | null; // <-- ADD THIS
 }
 
@@ -17,7 +17,7 @@ const CategorySchema = new Schema<ICategory>(
     icon: { type: String, required: true },
     color: { type: String, default: '#888888' },
     matchStrings: [{ type: String }],
-    isDefault: { type: Boolean, default: false },
+    // isDefault: { type: Boolean, default: false },
     // --- THIS IS THE FIX ---
     // A category can have a parent, which is another category.
     // If null, it's a top-level parent category.
