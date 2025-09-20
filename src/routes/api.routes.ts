@@ -334,8 +334,16 @@ router.post(
   async (req: Request, res: Response) => {
     try {
       const userId = req.auth!.sub;
-      const { amount, type, date, description, mode, source, subcategoryId } =
-        req.body;
+      const {
+        amount,
+        type,
+        date,
+        description,
+        mode,
+        source,
+        subcategoryId,
+        accountType,
+      } = req.body;
 
       if (!amount || !type || !date || !mode || !source) {
         return res.status(400).json({ message: 'Missing required fields.' });
@@ -350,16 +358,12 @@ router.post(
           .status(400)
           .json({ message: 'Type must be either "debit" or "credit".' });
       }
-      // Validate the new field name
       if (subcategoryId && !Types.ObjectId.isValid(subcategoryId)) {
         return res
           .status(400)
           .json({ message: 'Invalid subcategory ID format.' });
       }
-      // --- End Validation ---
 
-      // Create a unique "smsId" for manual transactions to maintain schema consistency.
-      // We can use a timestamp combined with a random string.
       const manualSmsId = `manual_${new Date().getTime()}_${Math.random()
         .toString(36)
         .substring(2, 9)}`;
@@ -377,7 +381,8 @@ router.post(
         mode,
         source,
         subcategoryId: subcategoryId || null,
-        status: 'success', // Manual entries are always successful
+        accountType: accountType || null,
+        status: 'success',
       });
 
       res.status(201).json(newTransaction);
