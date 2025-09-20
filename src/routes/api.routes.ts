@@ -9,56 +9,54 @@ import SourceMappingModel from '../models/sourceMapping.model';
 import CategoryModel from '../models/category.model';
 
 const router = Router();
-
-/**
- * Extracts and intelligently parses transaction data from a list of SMS objects.
- */
 function extractTransactionsFromSMS(smsList: any[], source: string) {
   const transactions = [];
 
-  const DEBIT_KEYWORDS = [
-    'spent',
-    'debited',
-    'purchase',
-    'payment',
-    'sent to',
-    'charged',
-    'withdrawn',
-    'paid',
-  ];
-  const CREDIT_KEYWORDS = [
-    'credited',
-    'received from',
-    'deposited',
-    'refund',
-    'received',
-    'added',
-  ];
-  const REJECTION_KEYWORDS = [
-    'offer',
-    'earn',
-    'save up to',
-    'congratulations',
-    'deal',
-    'discount',
-    'cashback',
-    'reward',
-    'statement',
-    'due on',
-    'e-statement',
-    'outstanding',
-    'unpaid',
-    'overdue',
-  ];
+  // --- NEW, MORE ROBUST KEYWORD AND REGEX SYSTEM ---
 
-  const amountRegex = /(?:Rs\.?|INR|₹)\s*([\d,]+\.?\d*)/i;
-  const failedRegex = /\b(failed|reversed|unsuccessful|declined)\b/i;
+  // DISQUALIFIERS: If any of these are present, the message is INSTANTLY rejected.
+  const DISQUALIFIER_REGEX = new RegExp(
+    [
+      'otp',
+      'offer',
+      'deal',
+      'discount',
+      'reward',
+      'cashback on',
+      'congratulations',
+      'due on',
+      'e-statement',
+      'outstanding',
+      'unpaid',
+      'overdue',
+      'bill is due',
+      'reminder',
+      'mandate',
+      'subscription renewal',
+      'loan',
+      'credit limit',
+      'available limit',
+      'voucher',
+      'coupon',
+      'win',
+      'chance to win',
+      'save up to',
+    ].join('|'),
+    'i'
+  );
 
-  // --- THIS IS THE FIX: New, more specific regex for card types ---
+  // ACTION KEYWORDS: These are the strongest indicators of a real transaction.
+  const DEBIT_ACTION_REGEX =
+    /\b(spent|debited|paid|charged|sent|payment of|purchase of|payment for)\b/i;
+  const CREDIT_ACTION_REGEX =
+    /\b(credited|received|refund|deposited|added to)\b/i;
+
+  // CONTEXT KEYWORDS: The presence of these greatly increases the chance it's a real transaction.
+  const ACCOUNT_CONTEXT_REGEX = /\b(a\/c|acct|account|card|ac|upi|vpa)\b/i;
+
+  const AMOUNT_REGEX = /(?:Rs\.?|INR|₹)\s*([\d,]+\.?\d*)/i;
   const creditCardRegex = /\bcredit card\b/i;
   const debitCardRegex = /\bdebit card\b/i;
-  // We no longer need the generic 'card', 'upi', or 'bank' regexes for this logic.
-  // --- END FIX ---
 
   for (const sms of smsList) {
     const originalBody = sms['@_body'] || '';
@@ -67,35 +65,63 @@ function extractTransactionsFromSMS(smsList: any[], source: string) {
 
     if (!lcBody || !smsDate) continue;
 
-    if (REJECTION_KEYWORDS.some((keyword) => lcBody.includes(keyword))) {
+    // --- STEP 1: INSTANT DISQUALIFICATION ---
+    // If the message contains any spammy or non-transactional keyword, reject it immediately.
+    if (DISQUALIFIER_REGEX.test(lcBody)) {
       continue;
     }
 
-    const amountMatch = lcBody.match(amountRegex);
+    // --- STEP 2: AMOUNT CHECK ---
+    // A transaction MUST have a clear amount.
+    const amountMatch = lcBody.match(AMOUNT_REGEX);
     if (!amountMatch) continue;
 
     const amount = parseFloat(amountMatch[1].replace(/,/g, ''));
     if (isNaN(amount) || amount === 0) continue;
 
+    // --- STEP 3: ACTION AND CONTEXT SCORING ---
+    // A real transaction needs strong evidence.
+    let transactionScore = 0;
     let type: 'credit' | 'debit' | null = null;
-    const isFailed = failedRegex.test(lcBody);
 
-    if (CREDIT_KEYWORDS.some((keyword) => lcBody.includes(keyword))) {
-      type = 'credit';
-    } else if (DEBIT_KEYWORDS.some((keyword) => lcBody.includes(keyword))) {
+    const isDebitAction = DEBIT_ACTION_REGEX.test(lcBody);
+    const isCreditAction = CREDIT_ACTION_REGEX.test(lcBody);
+    const hasAccountContext = ACCOUNT_CONTEXT_REGEX.test(lcBody);
+
+    // Both a debit and credit action in the same message is ambiguous (unless it's a clear refund).
+    if (isDebitAction && isCreditAction && !lcBody.includes('refund')) {
+      continue;
+    }
+
+    if (isDebitAction) {
+      transactionScore += 2;
       type = 'debit';
     }
 
-    if (!type) continue;
+    if (isCreditAction) {
+      transactionScore += 2;
+      type = 'credit';
+    }
 
-    // --- THIS IS THE FIX: Simplified and more accurate mode identification ---
-    let mode = 'Other'; // Default to 'Other'
+    // Having an account context is a very strong signal.
+    if (hasAccountContext) {
+      transactionScore += 1;
+    }
+
+    // --- STEP 4: FINAL DECISION ---
+    // A message must have a score of at least 3 (Action + Context) to be considered a transaction.
+    // This simple rule is extremely effective at filtering out promotions.
+    if (transactionScore < 3) {
+      continue;
+    }
+
+    // --- STEP 5: MODE IDENTIFICATION ---
+    let mode = 'Other';
     if (creditCardRegex.test(lcBody)) {
       mode = 'Credit Card';
     } else if (debitCardRegex.test(lcBody)) {
       mode = 'Debit Card';
     }
-    // --- END FIX ---
 
     transactions.push({
       smsId: smsDate,
@@ -103,9 +129,9 @@ function extractTransactionsFromSMS(smsList: any[], source: string) {
       body: originalBody,
       amount,
       type,
-      mode, // This will now be 'Credit Card', 'Debit Card', or 'Other'
+      mode,
       source,
-      status: isFailed ? 'failed' : 'success',
+      status: lcBody.includes('failed') ? 'failed' : 'success',
     });
   }
   return transactions;
@@ -248,8 +274,14 @@ router.post(
             tx.body.toLowerCase().includes(str.toLowerCase())
           )
         );
+
+        // If a mapping rule is found:
         if (matchingRule) {
-          return { ...tx, mode: matchingRule.mappingName };
+          return {
+            ...tx,
+            mode: matchingRule.mappingName, // Overwrite mode with the friendly Account Name
+            accountType: matchingRule.type, // Set the new accountType field
+          };
         }
         return tx;
       });
@@ -598,6 +630,52 @@ router.patch(
       res
         .status(500)
         .json({ message: 'Failed to update transaction category.' });
+    }
+  }
+);
+
+router.patch(
+  '/transactions/:id/account-type',
+  authMiddleware,
+  async (req: Request, res: Response) => {
+    try {
+      const { id } = req.params;
+      const { accountType } = req.body;
+      const userId = req.auth!.sub;
+
+      if (!Types.ObjectId.isValid(id)) {
+        return res
+          .status(400)
+          .json({ message: 'Invalid transaction ID format.' });
+      }
+      if (accountType && typeof accountType !== 'string') {
+        return res
+          .status(400)
+          .json({ message: 'A valid accountType string is required.' });
+      }
+
+      const updateOperation = accountType
+        ? { $set: { accountType: accountType } }
+        : { $unset: { accountType: '' } };
+
+      const updatedTransaction = await TransactionModel.findOneAndUpdate(
+        { _id: id, userId: userId },
+        updateOperation,
+        { new: true }
+      ).populate('subcategoryId', 'name icon color');
+
+      if (!updatedTransaction) {
+        return res.status(404).json({
+          message: 'Transaction not found or you do not have permission.',
+        });
+      }
+
+      res.status(200).json(updatedTransaction);
+    } catch (error) {
+      console.error('Error updating transaction account type:', error);
+      res
+        .status(500)
+        .json({ message: 'Failed to update transaction account type.' });
     }
   }
 );

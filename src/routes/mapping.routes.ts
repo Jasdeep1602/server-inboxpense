@@ -29,25 +29,26 @@ router.get('/', async (req: Request, res: Response) => {
 router.post('/', async (req: Request, res: Response) => {
   try {
     const userId = req.auth!.sub;
-    const { mappingName, matchStrings } = req.body;
+    const { mappingName, matchStrings, type } = req.body;
 
     if (
       !mappingName ||
+      !type ||
       !matchStrings ||
       !Array.isArray(matchStrings) ||
       matchStrings.length === 0
     ) {
-      return res
-        .status(400)
-        .json({
-          message: 'Mapping name and at least one match string are required.',
-        });
+      return res.status(400).json({
+        message:
+          'Mapping name, type, and at least one match string are required.',
+      });
     }
 
     const newMapping = await SourceMappingModel.create({
       userId,
       mappingName,
       matchStrings,
+      type,
     });
     res.status(201).json(newMapping);
   } catch (error) {
@@ -74,12 +75,10 @@ router.delete('/:id', async (req: Request, res: Response) => {
     });
 
     if (result.deletedCount === 0) {
-      return res
-        .status(404)
-        .json({
-          message:
-            'Mapping not found or you do not have permission to delete it.',
-        });
+      return res.status(404).json({
+        message:
+          'Mapping not found or you do not have permission to delete it.',
+      });
     }
     res.status(200).json({ message: 'Mapping deleted successfully.' });
   } catch (error) {

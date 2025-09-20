@@ -13,6 +13,7 @@ export interface ITransaction extends Document {
   status?: 'success' | 'failed';
   description?: string;
   details?: string;
+  accountType?: string;
 }
 
 const TransactionSchema = new Schema<ITransaction>(
@@ -35,6 +36,7 @@ const TransactionSchema = new Schema<ITransaction>(
     status: { type: String, enum: ['success', 'failed'] },
     description: { type: String },
     details: { type: String },
+    accountType: { type: String },
   },
   { timestamps: true }
 );
