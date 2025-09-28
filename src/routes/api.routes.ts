@@ -66,13 +66,11 @@ function extractTransactionsFromSMS(smsList: any[], source: string) {
     if (!lcBody || !smsDate) continue;
 
     // --- STEP 1: INSTANT DISQUALIFICATION ---
-    // If the message contains any spammy or non-transactional keyword, reject it immediately.
     if (DISQUALIFIER_REGEX.test(lcBody)) {
       continue;
     }
 
     // --- STEP 2: AMOUNT CHECK ---
-    // A transaction MUST have a clear amount.
     const amountMatch = lcBody.match(AMOUNT_REGEX);
     if (!amountMatch) continue;
 
@@ -80,18 +78,20 @@ function extractTransactionsFromSMS(smsList: any[], source: string) {
     if (isNaN(amount) || amount === 0) continue;
 
     // --- STEP 3: ACTION AND CONTEXT SCORING ---
-    // A real transaction needs strong evidence.
     let transactionScore = 0;
     let type: 'credit' | 'debit' | null = null;
 
-    const isDebitAction = DEBIT_ACTION_REGEX.test(lcBody);
-    const isCreditAction = CREDIT_ACTION_REGEX.test(lcBody);
+    let isDebitAction = DEBIT_ACTION_REGEX.test(lcBody);
+    let isCreditAction = CREDIT_ACTION_REGEX.test(lcBody);
     const hasAccountContext = ACCOUNT_CONTEXT_REGEX.test(lcBody);
 
-    // Both a debit and credit action in the same message is ambiguous (unless it's a clear refund).
+    // --- THIS IS THE FIX ---
+    // If both debit and credit keywords are present (e.g., "debited from your account, credited to merchant"),
+    // prioritize it as a debit transaction, as that's what matters to the user.
     if (isDebitAction && isCreditAction && !lcBody.includes('refund')) {
-      continue;
+      isCreditAction = false; // Ignore the credit part to resolve ambiguity
     }
+    // --- END FIX ---
 
     if (isDebitAction) {
       transactionScore += 2;
@@ -103,14 +103,11 @@ function extractTransactionsFromSMS(smsList: any[], source: string) {
       type = 'credit';
     }
 
-    // Having an account context is a very strong signal.
     if (hasAccountContext) {
       transactionScore += 1;
     }
 
     // --- STEP 4: FINAL DECISION ---
-    // A message must have a score of at least 3 (Action + Context) to be considered a transaction.
-    // This simple rule is extremely effective at filtering out promotions.
     if (transactionScore < 3) {
       continue;
     }
