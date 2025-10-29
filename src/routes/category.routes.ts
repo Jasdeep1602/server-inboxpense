@@ -15,7 +15,7 @@ type PlainCategory = {
   name: string;
   icon: string;
   color: string;
-  matchStrings: string[];
+  group: string;
   // isDefault: boolean;
   parentId: string | null; // Changed from Types.ObjectId
 };
@@ -82,22 +82,32 @@ router.get('/', async (req: Request, res: Response) => {
 router.post('/', async (req: Request, res: Response) => {
   try {
     const userId = req.auth!.sub;
-    const { name, icon, color, matchStrings, parentId } = req.body;
+    const { name, icon, color, group, parentId } = req.body;
 
-    // --- THIS IS THE FIX ---
-    // The validation check was still asking for `icon`.
-    // It should only require `name`.
     if (!name) {
       return res.status(400).json({ message: 'Category name is required.' });
     }
-    // --- END FIX ---
+    if (!parentId && !group) {
+      return res
+        .status(400)
+        .json({ message: 'A group is required for a parent category.' });
+    }
+
+    let finalGroup = group;
+    if (parentId) {
+      const parent = await CategoryModel.findById(parentId);
+      if (!parent) {
+        return res.status(404).json({ message: 'Parent category not found.' });
+      }
+      finalGroup = parent.group;
+    }
 
     const newCategory = await CategoryModel.create({
       userId,
       name,
-      icon: name, // We still set the icon from the name
+      icon: name,
       color,
-      matchStrings: matchStrings || [],
+      group: finalGroup,
       parentId: parentId || null,
     });
     res.status(201).json(newCategory);
@@ -114,7 +124,7 @@ router.put('/:id', async (req: Request, res: Response) => {
   try {
     const userId = req.auth!.sub;
     const { id } = req.params;
-    const { name, icon, color } = req.body;
+    const { name, icon, color, group } = req.body;
 
     if (!Types.ObjectId.isValid(id)) {
       return res.status(400).json({ message: 'Invalid ID format.' });
@@ -128,6 +138,11 @@ router.put('/:id', async (req: Request, res: Response) => {
     categoryToUpdate.name = name || categoryToUpdate.name;
     categoryToUpdate.icon = icon || categoryToUpdate.icon;
     categoryToUpdate.color = color || categoryToUpdate.color;
+
+    // Only allow changing the group for parent categories
+    if (group && !categoryToUpdate.parentId) {
+      categoryToUpdate.group = group;
+    }
 
     await categoryToUpdate.save();
     res.status(200).json(categoryToUpdate);

@@ -1,13 +1,19 @@
 import { Schema, model, Document, Types } from 'mongoose';
 
+export enum CategoryGroup {
+  EXPENSE = 'EXPENSE',
+  BUDGET = 'BUDGET',
+  INVESTMENT = 'INVESTMENT',
+  IGNORED = 'IGNORED',
+}
+
 export interface ICategory extends Document {
   userId: Types.ObjectId;
   name: string;
   icon: string;
   color: string;
-  matchStrings: string[];
-  // isDefault: boolean;
-  parentId: Types.ObjectId | null; // <-- ADD THIS
+  group: CategoryGroup;
+  parentId: Types.ObjectId | null;
 }
 
 const CategorySchema = new Schema<ICategory>(
@@ -16,13 +22,13 @@ const CategorySchema = new Schema<ICategory>(
     name: { type: String, required: true },
     icon: { type: String, required: true },
     color: { type: String, default: '#888888' },
-    matchStrings: [{ type: String }],
-    // isDefault: { type: Boolean, default: false },
-    // --- THIS IS THE FIX ---
-    // A category can have a parent, which is another category.
-    // If null, it's a top-level parent category.
+    group: {
+      type: String,
+      enum: Object.values(CategoryGroup),
+      required: true,
+      default: CategoryGroup.EXPENSE,
+    },
     parentId: { type: Schema.Types.ObjectId, ref: 'Category', default: null },
-    // --- END FIX ---
   },
   { timestamps: true }
 );

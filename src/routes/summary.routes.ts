@@ -2,12 +2,12 @@ import { Router, Request, Response } from 'express';
 import { authMiddleware } from '../middleware/auth.middleware';
 import { Types, PipelineStage } from 'mongoose';
 import TransactionModel from '../models/transaction.model';
-import CategoryModel from '../models/category.model';
+import CategoryModel, { CategoryGroup } from '../models/category.model';
 
 const router = Router();
 router.use(authMiddleware);
 
-// --- THIS IS THE NEW HELPER FUNCTION ---
+// --- HELPER FUNCTION ---
 const getDateRange = (period: string) => {
   const now = new Date();
   now.setUTCHours(0, 0, 0, 0);
@@ -45,7 +45,120 @@ const getDateRange = (period: string) => {
       return null;
   }
 };
-// --- END NEW HELPER FUNCTION ---
+// --- NEW ENDPOINT for Account Performance Chart ---
+router.get('/by-account', async (req: Request, res: Response) => {
+  try {
+    const userId = req.auth!.sub;
+    const { period = '6m' } = req.query as { [key: string]: string };
+
+    const matchFilter: any = {
+      userId: new Types.ObjectId(userId),
+      // Exclude generic, unmapped transactions from this summary
+      mode: { $nin: ['Other', 'Credit Card', 'Debit Card'] },
+    };
+
+    const dateRange = getDateRange(period);
+    if (dateRange) {
+      matchFilter.date = dateRange;
+    }
+
+    const aggregationPipeline: PipelineStage[] = [
+      { $match: matchFilter },
+      {
+        $group: {
+          _id: '$mode', // Group by the account name
+          totalCredit: {
+            $sum: { $cond: [{ $eq: ['$type', 'credit'] }, '$amount', 0] },
+          },
+          totalDebit: {
+            $sum: { $cond: [{ $eq: ['$type', 'debit'] }, '$amount', 0] },
+          },
+        },
+      },
+      {
+        $project: {
+          _id: 0,
+          account: '$_id',
+          totalCredit: 1,
+          totalDebit: 1,
+        },
+      },
+      { $sort: { totalDebit: -1 } }, // Sort by highest debit amount
+    ];
+
+    const result = await TransactionModel.aggregate(aggregationPipeline);
+    res.status(200).json(result);
+  } catch (error) {
+    console.error('Error fetching summary by account:', error);
+    res.status(500).json({ message: 'Failed to fetch account summary data.' });
+  }
+});
+
+// --- CURRENT MONTH OVERVIEW ENDPOINT ---
+router.get('/current-month-overview', async (req: Request, res: Response) => {
+  try {
+    const userId = req.auth!.sub;
+    const { source = 'All' } = req.query as { [key: string]: string };
+    const userObjectId = new Types.ObjectId(userId);
+
+    const matchFilter: any = {
+      userId: userObjectId,
+      date: getDateRange('current'),
+    };
+    if (source && source.toLowerCase() !== 'all') {
+      matchFilter.source = new RegExp(`^${source}$`, 'i');
+    }
+
+    const aggregation: PipelineStage[] = [
+      { $match: matchFilter },
+      {
+        $lookup: {
+          from: 'categories',
+          localField: 'subcategoryId',
+          foreignField: '_id',
+          as: 'category',
+        },
+      },
+      { $unwind: '$category' },
+      {
+        $group: {
+          _id: '$category.group',
+          credits: {
+            $sum: { $cond: [{ $eq: ['$type', 'credit'] }, '$amount', 0] },
+          },
+          debits: {
+            $sum: { $cond: [{ $eq: ['$type', 'debit'] }, '$amount', 0] },
+          },
+        },
+      },
+    ];
+
+    const result = await TransactionModel.aggregate(aggregation);
+
+    let totalBudget = 0;
+    let totalExpenses = 0;
+    let totalInvestments = 0;
+
+    result.forEach((group) => {
+      if (group._id === CategoryGroup.BUDGET) {
+        totalBudget = group.credits - group.debits;
+      } else if (group._id === CategoryGroup.EXPENSE) {
+        totalExpenses = group.debits;
+      } else if (group._id === CategoryGroup.INVESTMENT) {
+        totalInvestments = group.debits;
+      }
+    });
+
+    res.status(200).json({
+      totalBudget,
+      totalExpenses,
+      totalInvestments,
+    });
+  } catch (error) {
+    console.error('Error fetching current month overview:', error);
+    res.status(500).json({ message: 'Failed to fetch overview data.' });
+  }
+});
 
 /**
  * GET /api/summary/spending-by-category
@@ -53,7 +166,11 @@ const getDateRange = (period: string) => {
 router.get('/spending-by-category', async (req: Request, res: Response) => {
   try {
     const userId = req.auth!.sub;
-    const { source = 'All', period = '6m' } = req.query as {
+    const {
+      source = 'All',
+      period = '6m',
+      account = 'All',
+    } = req.query as {
       [key: string]: string;
     };
 
@@ -65,6 +182,10 @@ router.get('/spending-by-category', async (req: Request, res: Response) => {
 
     if (source && source.toLowerCase() !== 'all') {
       matchFilter.source = new RegExp(`^${source}$`, 'i');
+    }
+
+    if (account && account.toLowerCase() !== 'all') {
+      matchFilter.mode = new RegExp(`^${account}$`, 'i');
     }
 
     const dateRange = getDateRange(period);
@@ -83,6 +204,7 @@ router.get('/spending-by-category', async (req: Request, res: Response) => {
         },
       },
       { $unwind: '$subcategory' },
+      { $match: { 'subcategory.group': { $ne: 'IGNORED' } } },
       {
         $lookup: {
           from: 'categories',
@@ -160,6 +282,22 @@ router.get('/monthly', async (req: Request, res: Response) => {
     const aggregationPipeline: PipelineStage[] = [
       { $match: matchFilter },
       {
+        $lookup: {
+          from: 'categories',
+          localField: 'subcategoryId',
+          foreignField: '_id',
+          as: 'categoryInfo',
+        },
+      },
+      {
+        $match: {
+          $or: [
+            { subcategoryId: { $exists: false } },
+            { 'categoryInfo.group': { $ne: 'IGNORED' } },
+          ],
+        },
+      },
+      {
         $group: {
           _id: { $dateToString: { format: groupFormat, date: '$date' } },
           totalCredit: {
@@ -188,9 +326,9 @@ router.get('/monthly', async (req: Request, res: Response) => {
     res.status(500).json({ message: 'Failed to fetch monthly summary data.' });
   }
 });
+
 /**
  * GET /api/summary/subcategory-breakdown
- * The new endpoint for the drill-down feature.
  */
 router.get('/subcategory-breakdown', async (req: Request, res: Response) => {
   try {
@@ -205,18 +343,16 @@ router.get('/subcategory-breakdown', async (req: Request, res: Response) => {
       return res.status(400).json({ message: 'A valid parentId is required.' });
     }
 
-    // First, find all subcategories that belong to the given parent
     const subcategories = await CategoryModel.find({
       parentId: new Types.ObjectId(parentId),
       userId: new Types.ObjectId(userId),
     });
     const subcategoryIds = subcategories.map((sub) => sub._id);
 
-    // Now, build the transaction match filter
     const matchFilter: any = {
       userId: new Types.ObjectId(userId),
       type: 'debit',
-      subcategoryId: { $in: subcategoryIds }, // Match any transaction in our list of subcategories
+      subcategoryId: { $in: subcategoryIds },
     };
 
     if (source && source.toLowerCase() !== 'all') {
@@ -229,18 +365,13 @@ router.get('/subcategory-breakdown', async (req: Request, res: Response) => {
     }
 
     const aggregationPipeline: PipelineStage[] = [
-      // 1. Find all transactions that match our criteria
       { $match: matchFilter },
-
-      // 2. Group them by their subcategoryId and sum the amount
       {
         $group: {
           _id: '$subcategoryId',
           total: { $sum: '$amount' },
         },
       },
-
-      // 3. Lookup the details for each of the grouped subcategory IDs
       {
         $lookup: {
           from: 'categories',
@@ -250,8 +381,6 @@ router.get('/subcategory-breakdown', async (req: Request, res: Response) => {
         },
       },
       { $unwind: '$subcategoryDetails' },
-
-      // 4. Project to the final desired shape
       {
         $project: {
           _id: 0,
