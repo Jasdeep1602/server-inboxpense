@@ -43,4 +43,10 @@ const TransactionSchema = new Schema<ITransaction>(
 
 TransactionSchema.index({ userId: 1, source: 1, smsId: 1 }, { unique: true });
 
+// --- THIS IS THE FIX: Add TTL Index for automatic data purging ---
+// This tells MongoDB to automatically delete documents from this collection
+// 31,536,000 seconds (1 year) after they are created.
+TransactionSchema.index({ createdAt: 1 }, { expireAfterSeconds: 31536000 });
+// --- END FIX ---
+
 export default model<ITransaction>('Transaction', TransactionSchema);

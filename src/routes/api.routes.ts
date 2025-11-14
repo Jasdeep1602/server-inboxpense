@@ -12,6 +12,11 @@ const router = Router();
 function extractTransactionsFromSMS(smsList: any[], source: string) {
   const transactions = [];
 
+  // --- THIS IS THE FIX: Calculate the date 12 months ago ---
+  const twelveMonthsAgo = new Date();
+  twelveMonthsAgo.setFullYear(twelveMonthsAgo.getFullYear() - 1);
+  // --- END FIX ---
+
   // --- NEW, MORE ROBUST KEYWORD AND REGEX SYSTEM ---
 
   // DISQUALIFIERS: If any of these are present, the message is INSTANTLY rejected.
@@ -65,6 +70,12 @@ function extractTransactionsFromSMS(smsList: any[], source: string) {
 
     if (!lcBody || !smsDate) continue;
 
+    // --- THIS IS THE FIX: Skip processing SMS older than 12 months ---
+    if (new Date(parseInt(smsDate)) < twelveMonthsAgo) {
+      continue;
+    }
+    // --- END FIX ---
+
     // --- STEP 1: INSTANT DISQUALIFICATION ---
     if (DISQUALIFIER_REGEX.test(lcBody)) {
       continue;
@@ -85,13 +96,9 @@ function extractTransactionsFromSMS(smsList: any[], source: string) {
     let isCreditAction = CREDIT_ACTION_REGEX.test(lcBody);
     const hasAccountContext = ACCOUNT_CONTEXT_REGEX.test(lcBody);
 
-    // --- THIS IS THE FIX ---
-    // If both debit and credit keywords are present (e.g., "debited from your account, credited to merchant"),
-    // prioritize it as a debit transaction, as that's what matters to the user.
     if (isDebitAction && isCreditAction && !lcBody.includes('refund')) {
-      isCreditAction = false; // Ignore the credit part to resolve ambiguity
+      isCreditAction = false;
     }
-    // --- END FIX ---
 
     if (isDebitAction) {
       transactionScore += 2;
