@@ -8,7 +8,7 @@ const router = Router();
 router.use(authMiddleware);
 
 // --- UPDATED HELPER FUNCTION ---
-const getMonthDateRange = (month: string) => {
+const getDateRange = (month: string) => {
   // Expects month in "YYYY-MM" format
   if (!month || !/^\d{4}-\d{2}$/.test(month)) {
     // Default to current month if format is invalid
@@ -41,7 +41,7 @@ router.get('/by-account', async (req: Request, res: Response) => {
       type: 'debit',
       // Exclude generic, unmapped transactions from this summary
       mode: { $nin: ['Other', 'Credit Card', 'Debit Card'] },
-      date: getMonthDateRange(month as string),
+      date: getDateRange(month as string),
     };
 
     const aggregationPipeline: PipelineStage[] = [
@@ -79,7 +79,7 @@ router.get('/current-month-overview', async (req: Request, res: Response) => {
 
     const matchFilter: any = {
       userId: userObjectId,
-      date: getMonthDateRange(month as string),
+      date: getDateRange(month as string),
     };
 
     if (source && source.toLowerCase() !== 'all') {
@@ -151,7 +151,7 @@ router.get('/spending-by-category', async (req: Request, res: Response) => {
       userId: new Types.ObjectId(userId),
       type: 'debit',
       subcategoryId: { $exists: true, $ne: null },
-      date: getMonthDateRange(month as string),
+      date: getDateRange(month as string),
     };
 
     if (source && source.toLowerCase() !== 'all') {
@@ -234,7 +234,7 @@ router.get('/subcategory-breakdown', async (req: Request, res: Response) => {
       userId: new Types.ObjectId(userId),
       type: 'debit',
       subcategoryId: { $in: subcategoryIds },
-      date: getMonthDateRange(month as string),
+      date: getDateRange(month as string),
     };
 
     if (source && source.toLowerCase() !== 'all') {
