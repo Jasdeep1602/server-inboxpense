@@ -2,7 +2,7 @@ import { Router, Request, Response } from 'express';
 import { authMiddleware } from '../middleware/auth.middleware';
 import TransactionModel from '../models/transaction.model';
 import { Parser } from 'json2csv';
-import { Types } from 'mongoose';
+import { Types, PipelineStage } from 'mongoose';
 
 const router = Router();
 router.use(authMiddleware);
@@ -35,12 +35,40 @@ router.get('/csv', async (req: Request, res: Response) => {
       fileNamePeriod = month;
     }
 
-    // --- THIS IS THE FIX ---
-    // Change `.populate('categoryId', 'name')` to `.populate('subcategoryId', 'name')`
-    const transactions = await TransactionModel.find(queryFilter)
-      .populate('subcategoryId', 'name')
-      .sort({ date: -1 });
-    // --- END FIX ---
+    const aggregationPipeline: PipelineStage[] = [
+      { $match: queryFilter },
+      { $sort: { date: -1 } },
+      {
+        $lookup: {
+          from: 'categories',
+          localField: 'subcategoryId',
+          foreignField: '_id',
+          as: 'subcategory',
+        },
+      },
+      {
+        $unwind: {
+          path: '$subcategory',
+          preserveNullAndEmptyArrays: true,
+        },
+      },
+      {
+        $lookup: {
+          from: 'categories',
+          localField: 'subcategory.parentId',
+          foreignField: '_id',
+          as: 'parentCategory',
+        },
+      },
+      {
+        $unwind: {
+          path: '$parentCategory',
+          preserveNullAndEmptyArrays: true,
+        },
+      },
+    ];
+
+    const transactions = await TransactionModel.aggregate(aggregationPipeline);
 
     if (transactions.length === 0) {
       res.setHeader('Content-Type', 'text/csv');
@@ -67,12 +95,9 @@ router.get('/csv', async (req: Request, res: Response) => {
         Type: tx.type,
         Amount: tx.amount,
         Account: tx.mode,
-        // --- THIS IS THE FIX ---
-        // Change `tx.categoryId` to `tx.subcategoryId`
-        Category: tx.subcategoryId
-          ? (tx.subcategoryId as any).name
-          : 'Uncategorized',
-        // --- END FIX ---
+        Group: tx.parentCategory?.group || '',
+        Category: tx.parentCategory?.name || '',
+        Subcategory: tx.subcategory?.name || 'Uncategorized',
         Description: tx.description || '',
         Profile: tx.source,
       };
@@ -84,7 +109,9 @@ router.get('/csv', async (req: Request, res: Response) => {
       'Type',
       'Amount',
       'Account',
+      'Group',
       'Category',
+      'Subcategory',
       'Description',
       'Profile',
     ];
