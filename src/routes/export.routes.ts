@@ -119,12 +119,12 @@ router.get('/csv-range', async (req: Request, res: Response) => {
       'Date',
       'Time',
       'Type',
-      'Amount',
       'Account',
       'Group',
       'Category',
       'Subcategory',
       'Description',
+      'Amount',
       'Profile',
     ];
 
@@ -201,12 +201,12 @@ router.get('/csv', async (req: Request, res: Response) => {
       'Date',
       'Time',
       'Type',
-      'Amount',
       'Account',
       'Group',
       'Category',
       'Subcategory',
       'Description',
+      'Amount',
       'Profile',
     ];
 
